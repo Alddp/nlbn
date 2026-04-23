@@ -90,6 +90,7 @@ Options:
   --continue-on-error     Skip failed components in batch mode
   --overwrite             Overwrite existing components
   --v5                    Use KiCad v5 legacy format
+  --project-relative      Use ${KIPRJMOD}/... paths for 3D models
   --debug                 Enable debug logging
   -h, --help              Print help
 ```
@@ -102,6 +103,7 @@ output/
 ├── nlbn.pretty/                # Footprint library
 │   └── Component_Name.kicad_mod
 └── nlbn.3dshapes/              # 3D model library
+    ├── Component_Name.wrl
     └── Component_Name.step
 ```
 

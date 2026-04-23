@@ -1,12 +1,12 @@
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
+use nlbn::checkpoint::{append_checkpoint, load_checkpoint};
 use nlbn::*;
-use nlbn::checkpoint::{load_checkpoint, append_checkpoint};
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use indicatif::{ProgressBar, ProgressStyle};
 
 #[tokio::main]
 async fn main() {
@@ -57,11 +57,15 @@ async fn run(args: Cli) -> error::Result<()> {
     let completed_ids = load_checkpoint(&checkpoint_path);
     let lcsc_ids: Vec<String> = if is_batch && !completed_ids.is_empty() {
         let before = lcsc_ids.len();
-        let filtered: Vec<String> = lcsc_ids.into_iter()
+        let filtered: Vec<String> = lcsc_ids
+            .into_iter()
             .filter(|id| !completed_ids.contains(id))
             .collect();
         if before != filtered.len() {
-            log::info!("Resuming: skipping {} already completed components", before - filtered.len());
+            log::info!(
+                "Resuming: skipping {} already completed components",
+                before - filtered.len()
+            );
         }
         filtered
     } else {
@@ -196,7 +200,10 @@ async fn run(args: Cli) -> error::Result<()> {
     if is_batch {
         println!("\n{}", "=".repeat(60));
         println!("Batch conversion complete!");
-        println!("Total: {} | Success: {} | Failed: {}", total_count, success, failed);
+        println!(
+            "Total: {} | Success: {} | Failed: {}",
+            total_count, success, failed
+        );
 
         if !failed_list.is_empty() {
             println!("\nFailed components:");
@@ -215,7 +222,12 @@ async fn run(args: Cli) -> error::Result<()> {
     Ok(())
 }
 
-async fn process_component(args: &Cli, api: &EasyedaApi, lib_manager: &LibraryManager, lcsc_id: &str) -> error::Result<()> {
+async fn process_component(
+    args: &Cli,
+    api: &EasyedaApi,
+    lib_manager: &LibraryManager,
+    lcsc_id: &str,
+) -> error::Result<()> {
     // Fetch component data from EasyEDA API
     let component_data = api.get_component_data(lcsc_id).await?;
 
@@ -227,15 +239,15 @@ async fn process_component(args: &Cli, api: &EasyedaApi, lib_manager: &LibraryMa
         symbol_converter::convert_symbol(args, &component_data, lib_manager, lcsc_id)?;
     }
 
-    // Process footprint (if requested)
-    if args.footprint || args.full {
-        log::info!("Converting footprint...");
-        footprint_converter::convert_footprint(args, &component_data, lib_manager, lcsc_id)?;
-    }
-
     // Process 3D model (if requested)
     if args.model_3d || args.full {
         model_converter::convert_3d_model(api, &component_data, lib_manager, lcsc_id).await?;
+    }
+
+    // Process footprint after 3D export so the footprint can reference the file that actually exists.
+    if args.footprint || args.full {
+        log::info!("Converting footprint...");
+        footprint_converter::convert_footprint(args, &component_data, lib_manager, lcsc_id)?;
     }
 
     Ok(())

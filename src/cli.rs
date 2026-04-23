@@ -1,6 +1,6 @@
+use crate::error::{AppError, Result};
 use clap::Parser;
 use std::path::PathBuf;
-use crate::error::{AppError, Result};
 
 #[derive(Parser, Debug)]
 #[command(name = "nlbn")]
@@ -43,7 +43,7 @@ pub struct Cli {
     #[arg(long)]
     pub v5: bool,
 
-    /// Use global paths (KICAD6_3DMODEL_DIR) instead of project-relative paths (KIPRJMOD) for 3D models
+    /// Use project-relative paths (KIPRJMOD) instead of footprint-relative paths for 3D models
     #[arg(long)]
     pub project_relative: bool,
 
@@ -65,7 +65,7 @@ impl Cli {
         // Check if at least one ID source is provided
         if self.lcsc_id.is_none() && self.batch.is_none() {
             return Err(AppError::Other(
-                "Either --lcsc-id or --batch must be specified".to_string()
+                "Either --lcsc-id or --batch must be specified".to_string(),
             ));
         }
 
@@ -73,7 +73,7 @@ impl Cli {
         if let Some(ref id) = self.lcsc_id {
             if !id.starts_with('C') || id.len() < 2 {
                 return Err(AppError::Easyeda(
-                    crate::error::EasyedaError::InvalidLcscId(id.clone())
+                    crate::error::EasyedaError::InvalidLcscId(id.clone()),
                 ));
             }
         }
@@ -95,19 +95,22 @@ impl Cli {
             Ok(vec![id.clone()])
         } else if let Some(ref batch_file) = self.batch {
             // Batch mode: extract all LCSC IDs (C + digits) from file
-            use std::fs;
             use regex::Regex;
+            use std::fs;
 
             let content = fs::read_to_string(batch_file)
                 .map_err(|e| AppError::Other(format!("Failed to open batch file: {}", e)))?;
 
             let re = Regex::new(r"C\d+").unwrap();
-            let ids: Vec<String> = re.find_iter(&content)
+            let ids: Vec<String> = re
+                .find_iter(&content)
                 .map(|m| m.as_str().to_string())
                 .collect();
 
             if ids.is_empty() {
-                return Err(AppError::Other("No valid LCSC IDs found in batch file".to_string()));
+                return Err(AppError::Other(
+                    "No valid LCSC IDs found in batch file".to_string(),
+                ));
             }
 
             log::info!("Loaded {} LCSC IDs from batch file", ids.len());
