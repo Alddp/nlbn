@@ -341,13 +341,9 @@ impl LibraryManager {
     }
 
     /// Get the symbol library path
-    pub fn get_symbol_lib_path(&self, v5: bool) -> PathBuf {
-        if v5 {
-            self.output_path.join(format!("{}.lib", self.lib_name))
-        } else {
-            self.output_path
-                .join(format!("{}.kicad_sym", self.lib_name))
-        }
+    pub fn get_symbol_lib_path(&self) -> PathBuf {
+        self.output_path
+            .join(format!("{}.kicad_sym", self.lib_name))
     }
 
     fn replace_symbol_session_content(&self, lib_path: &Path, content: String) {
@@ -407,24 +403,12 @@ fn collect_component_names(content: &str) -> HashSet<String> {
         }
     }
 
-    if let Ok(v5) = Regex::new(r"(?m)^DEF\s+(\S+)\s+") {
-        for captures in v5.captures_iter(content) {
-            if let Some(name) = captures.get(1) {
-                names.insert(name.as_str().to_string());
-            }
-        }
-    }
-
     names
 }
 
 fn add_component_to_content(existing_content: &str, component_data: &str) -> String {
     let mut content = if existing_content.is_empty() {
-        if component_data.contains("(symbol") {
-            String::from("(kicad_symbol_lib\n  (version 20211014)\n  (generator nlbn)")
-        } else {
-            String::from("EESchema-LIBRARY Version 2.4\n#encoding utf-8")
-        }
+        String::from("(kicad_symbol_lib\n  (version 20211014)\n  (generator nlbn)")
     } else {
         existing_content
             .trim_end()
@@ -462,23 +446,6 @@ fn update_component_in_content(
             new_content.push_str(&content[block_end..]);
             return Ok(new_content);
         }
-    }
-
-    let v5_start = format!("DEF {} ", component_name);
-    if let Some(start) = content.find(&v5_start)
-        && let Some(end_offset) = content[start..].find("ENDDEF")
-    {
-        let block_end = start + end_offset + "ENDDEF".len();
-        let block_end = if content[block_end..].starts_with('\n') {
-            block_end + 1
-        } else {
-            block_end
-        };
-        let mut new_content = String::with_capacity(content.len());
-        new_content.push_str(&content[..start]);
-        new_content.push_str(new_data);
-        new_content.push_str(&content[block_end..]);
-        return Ok(new_content);
     }
 
     Err(
@@ -572,7 +539,7 @@ mod tests {
         let manager = LibraryManager::new(&output_dir);
         manager.create_directories().unwrap();
 
-        let lib_path = manager.get_symbol_lib_path(false);
+        let lib_path = manager.get_symbol_lib_path();
         manager
             .stage_or_update_component(&lib_path, "A", &symbol_block("A"), false)
             .unwrap();
@@ -598,7 +565,7 @@ mod tests {
         let manager = LibraryManager::with_overwrite(&output_dir, true);
         manager.create_directories().unwrap();
 
-        let lib_path = manager.get_symbol_lib_path(false);
+        let lib_path = manager.get_symbol_lib_path();
         manager
             .stage_or_update_component(&lib_path, "A", &symbol_block("A"), false)
             .unwrap();
@@ -627,7 +594,7 @@ mod tests {
         let manager = LibraryManager::new(&output_dir);
         manager.create_directories().unwrap();
 
-        let lib_path = manager.get_symbol_lib_path(false);
+        let lib_path = manager.get_symbol_lib_path();
         manager
             .add_or_update_component(&lib_path, "A", &symbol_block("A"), false)
             .unwrap();

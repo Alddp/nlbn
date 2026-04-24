@@ -89,7 +89,6 @@ Options:
   --parallel <N>          Parallel threads for batch mode [default: 4]
   --continue-on-error     Skip failed components in batch mode
   --overwrite             Overwrite existing components
-  --v5                    Use KiCad v5 legacy format
   --project-relative      Use ${KIPRJMOD}/... paths for 3D models
   --symbol-fill-color     Override filled symbol rectangle color with #RRGGBB or #RRGGBBAA
   --debug                 Enable debug logging
@@ -128,9 +127,6 @@ nlbn --full --batch components.txt --parallel 16 -o ./library
 
 # Resume interrupted batch (skip existing)
 nlbn --full --batch components.txt --continue-on-error
-
-# KiCad v5 format
-nlbn --full --lcsc-id C529356 --v5
 ```
 
 ## License

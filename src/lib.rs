@@ -12,7 +12,7 @@ mod reporting;
 mod runner;
 pub mod symbol_converter;
 
-pub use cli::{Cli, KicadVersion};
+pub use cli::Cli;
 pub use converter::Converter;
 pub use easyeda::{EasyedaApi, FootprintImporter, SymbolImporter};
 pub use error::{AppError, Result};

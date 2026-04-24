@@ -31,7 +31,7 @@ impl PinType {
         }
     }
 
-    pub fn to_kicad_v6(&self) -> &'static str {
+    pub fn to_kicad(&self) -> &'static str {
         match self {
             PinType::Input => "input",
             PinType::Output => "output",
@@ -44,22 +44,6 @@ impl PinType {
             PinType::OpenCollector => "open_collector",
             PinType::OpenEmitter => "open_emitter",
             PinType::NoConnect => "no_connect",
-        }
-    }
-
-    pub fn to_kicad_v5(&self) -> &'static str {
-        match self {
-            PinType::Input => "I",
-            PinType::Output => "O",
-            PinType::Bidirectional => "B",
-            PinType::TriState => "T",
-            PinType::Passive => "P",
-            PinType::Unspecified => "U",
-            PinType::PowerIn => "W",
-            PinType::PowerOut => "w",
-            PinType::OpenCollector => "C",
-            PinType::OpenEmitter => "E",
-            PinType::NoConnect => "N",
         }
     }
 }
@@ -78,7 +62,7 @@ pub enum PinStyle {
 }
 
 impl PinStyle {
-    pub fn to_kicad_v6(&self) -> &'static str {
+    pub fn to_kicad(&self) -> &'static str {
         match self {
             PinStyle::Line => "line",
             PinStyle::Inverted => "inverted",
@@ -89,20 +73,6 @@ impl PinStyle {
             PinStyle::OutputLow => "output_low",
             PinStyle::EdgeClockHigh => "edge_clock_high",
             PinStyle::NonLogic => "non_logic",
-        }
-    }
-
-    pub fn to_kicad_v5(&self) -> &'static str {
-        match self {
-            PinStyle::Line => "",
-            PinStyle::Inverted => "I",
-            PinStyle::Clock => "C",
-            PinStyle::InvertedClock => "IC",
-            PinStyle::InputLow => "L",
-            PinStyle::ClockLow => "CL",
-            PinStyle::OutputLow => "V",
-            PinStyle::EdgeClockHigh => "F",
-            PinStyle::NonLogic => "X",
         }
     }
 }

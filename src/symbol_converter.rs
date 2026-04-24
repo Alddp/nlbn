@@ -282,10 +282,10 @@ pub(crate) fn convert_symbol_with_options_and_reporter(
     }
 
     // Export symbol
-    let exporter = kicad::SymbolExporter::new(options.kicad_version, options.symbol_fill_color);
+    let exporter = kicad::SymbolExporter::new(options.symbol_fill_color);
     let symbol_data = exporter.export(&ki_symbol)?;
 
-    let lib_path = lib_manager.get_symbol_lib_path(options.v5);
+    let lib_path = lib_manager.get_symbol_lib_path();
 
     // Use thread-safe add_or_update method
     lib_manager.stage_or_update_component(

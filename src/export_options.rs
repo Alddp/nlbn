@@ -1,22 +1,18 @@
-use crate::cli::{Cli, KicadVersion};
+use crate::cli::Cli;
 use crate::error::{AppError, EasyedaError, Result};
 use crate::kicad::symbol_exporter::SymbolFillColor;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct SymbolExportOptions {
-    pub kicad_version: KicadVersion,
     pub symbol_fill_color: Option<SymbolFillColor>,
-    pub v5: bool,
     pub overwrite: bool,
 }
 
 impl SymbolExportOptions {
     pub fn from_cli(cli: &Cli) -> Result<Self> {
         Ok(Self {
-            kicad_version: kicad_version_from_flag(cli.v5),
             symbol_fill_color: parse_symbol_fill_color(cli.symbol_fill_color.as_deref())?,
-            v5: cli.v5,
             overwrite: cli.overwrite,
         })
     }
@@ -24,7 +20,6 @@ impl SymbolExportOptions {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FootprintExportOptions {
-    pub kicad_version: KicadVersion,
     pub include_3d_model: bool,
     pub project_relative_3d: bool,
 }
@@ -32,7 +27,6 @@ pub struct FootprintExportOptions {
 impl From<&Cli> for FootprintExportOptions {
     fn from(cli: &Cli) -> Self {
         Self {
-            kicad_version: kicad_version_from_flag(cli.v5),
             include_3d_model: cli.model_3d || cli.full,
             project_relative_3d: cli.project_relative,
         }
@@ -148,14 +142,6 @@ fn resolve_lcsc_ids(cli: &Cli) -> Result<Vec<String>> {
     Err(AppError::Other("No LCSC ID source specified".to_string()))
 }
 
-fn kicad_version_from_flag(v5: bool) -> KicadVersion {
-    if v5 {
-        KicadVersion::V5
-    } else {
-        KicadVersion::V6
-    }
-}
-
 fn parse_symbol_fill_color(value: Option<&str>) -> Result<Option<SymbolFillColor>> {
     value.map(SymbolFillColor::parse).transpose()
 }
@@ -176,7 +162,6 @@ mod tests {
             full: true,
             output: PathBuf::from("out"),
             overwrite: true,
-            v5: false,
             project_relative: true,
             symbol_fill_color: Some("#005C8FCC".to_string()),
             debug: false,

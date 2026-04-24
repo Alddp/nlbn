@@ -1,4 +1,3 @@
-use crate::cli::KicadVersion;
 use crate::converter::Converter;
 use crate::error::{AppError, Result};
 use crate::kicad::symbol::*;
@@ -70,25 +69,20 @@ impl SymbolFillColor {
 }
 
 pub struct SymbolExporter {
-    version: KicadVersion,
     converter: Converter,
     rectangle_fill_color: Option<SymbolFillColor>,
 }
 
 impl SymbolExporter {
-    pub fn new(version: KicadVersion, rectangle_fill_color: Option<SymbolFillColor>) -> Self {
+    pub fn new(rectangle_fill_color: Option<SymbolFillColor>) -> Self {
         Self {
-            version,
-            converter: Converter::new(version),
+            converter: Converter::new(),
             rectangle_fill_color,
         }
     }
 
     pub fn export(&self, symbol: &KiSymbol) -> Result<String> {
-        match self.version {
-            KicadVersion::V6 => self.export_v6(symbol),
-            KicadVersion::V5 => self.export_v5(symbol),
-        }
+        self.export_v6(symbol)
     }
 
     fn export_v6(&self, symbol: &KiSymbol) -> Result<String> {
@@ -261,50 +255,6 @@ impl SymbolExporter {
         (y_high, y_low)
     }
 
-    fn export_v5(&self, symbol: &KiSymbol) -> Result<String> {
-        let mut output = String::new();
-
-        // DEF name reference unused text_offset draw_pinnumber draw_pinname unit_count units_locked option_flag
-        output.push_str(&format!(
-            "DEF {} {} 0 40 Y Y 1 F N\n",
-            symbol.name, symbol.reference
-        ));
-
-        // F0 reference x y size orientation visibility hjustify vjustify/italic/bold
-        output.push_str(&format!("F0 \"{}\" 0 0 50 H V C CNN\n", symbol.reference));
-        output.push_str(&format!("F1 \"{}\" 0 -100 50 H V C CNN\n", symbol.value));
-        output.push_str(&format!("F2 \"{}\" 0 0 50 H I C CNN\n", symbol.footprint));
-        output.push_str(&format!("F3 \"{}\" 0 0 50 H I C CNN\n", symbol.datasheet));
-
-        // DRAW
-        output.push_str("DRAW\n");
-
-        // Rectangles
-        for rect in &symbol.rectangles {
-            output.push_str(&self.format_rectangle_v5(rect));
-        }
-
-        // Circles
-        for circle in &symbol.circles {
-            output.push_str(&self.format_circle_v5(circle));
-        }
-
-        // Polylines
-        for polyline in &symbol.polylines {
-            output.push_str(&self.format_polyline_v5(polyline));
-        }
-
-        // Pins
-        for pin in &symbol.pins {
-            output.push_str(&self.format_pin_v5(pin));
-        }
-
-        output.push_str("ENDDRAW\n");
-        output.push_str("ENDDEF\n");
-
-        Ok(output)
-    }
-
     fn format_pin_v6(&self, pin: &KiPin) -> String {
         let x = self.converter.px_to_mm(pin.pos_x);
         let y = self.converter.px_to_mm(pin.pos_y);
@@ -315,36 +265,14 @@ impl SymbolExporter {
 
         format!(
             "      (pin {} {}\n        (at {:.2} {:.2} {})\n        (length {:.2})\n        (name \"{}\" (effects (font (size 1.27 1.27))))\n        (number \"{}\" (effects (font (size 1.27 1.27))))\n      )\n",
-            pin.pin_type.to_kicad_v6(),
-            pin.style.to_kicad_v6(),
+            pin.pin_type.to_kicad(),
+            pin.style.to_kicad(),
             x,
             y,
             orientation,
             length,
             pin.name,
             pin.number
-        )
-    }
-
-    fn format_pin_v5(&self, pin: &KiPin) -> String {
-        let x = self.converter.px_to_mil(pin.pos_x);
-        let y = self.converter.px_to_mil(pin.pos_y); // Don't flip, already handled
-        let length = self.converter.px_to_mil(pin.length);
-
-        // X name number posx posy length orientation Snum Snom unit convert Etype [shape]
-        format!(
-            "X {} {} {} {} {} {} {} {} {} {} {}\n",
-            pin.name,
-            pin.number,
-            x,
-            y,
-            length,
-            self.rotation_to_direction(pin.rotation),
-            50, // name size
-            50, // number size
-            1,  // unit
-            1,  // convert
-            pin.pin_type.to_kicad_v5()
         )
     }
 
@@ -369,18 +297,6 @@ impl SymbolExporter {
         )
     }
 
-    fn format_rectangle_v5(&self, rect: &KiRectangle) -> String {
-        let x1 = self.converter.px_to_mil(rect.x1);
-        let y1 = self.converter.px_to_mil(rect.y1); // Don't flip, already handled
-        let x2 = self.converter.px_to_mil(rect.x2);
-        let y2 = self.converter.px_to_mil(rect.y2); // Don't flip, already handled
-
-        let fill = if rect.fill { "F" } else { "N" };
-
-        // S startx starty endx endy unit convert thickness fill
-        format!("S {} {} {} {} 1 1 10 {}\n", x1, y1, x2, y2, fill)
-    }
-
     fn format_circle_v6(&self, circle: &KiCircle) -> String {
         let cx = self.converter.px_to_mm(circle.cx);
         let cy = self.converter.px_to_mm(circle.cy);
@@ -393,17 +309,6 @@ impl SymbolExporter {
             "      (circle\n        (center {:.2} {:.2})\n        (radius {:.2})\n        (stroke (width {}) (type default) (color 0 0 0 0))\n        (fill (type {}))\n      )\n",
             cx, cy, radius, 0, fill
         )
-    }
-
-    fn format_circle_v5(&self, circle: &KiCircle) -> String {
-        let cx = self.converter.px_to_mil(circle.cx);
-        let cy = self.converter.px_to_mil(circle.cy); // Don't flip, already handled
-        let radius = self.converter.px_to_mil(circle.radius);
-
-        let fill = if circle.fill { "F" } else { "N" };
-
-        // C posx posy radius unit convert thickness fill
-        format!("C {} {} {} 1 1 10 {}\n", cx, cy, radius, fill)
     }
 
     fn format_arc_v6(&self, arc: &KiArc) -> String {
@@ -444,32 +349,6 @@ impl SymbolExporter {
         output
     }
 
-    fn format_polyline_v5(&self, polyline: &KiPolyline) -> String {
-        let point_count = polyline.points.len();
-        let mut output = format!("P {} 1 1 10", point_count);
-
-        for (x, y) in &polyline.points {
-            let x = self.converter.px_to_mil(*x);
-            let y = self.converter.px_to_mil(*y); // Don't flip, already handled
-            output.push_str(&format!(" {} {}", x, y));
-        }
-
-        let fill = if polyline.fill { "F" } else { "N" };
-        output.push_str(&format!(" {}\n", fill));
-
-        output
-    }
-
-    fn rotation_to_direction(&self, rotation: i32) -> char {
-        match rotation {
-            0 => 'R',
-            90 => 'U',
-            180 => 'L',
-            270 => 'D',
-            _ => 'R',
-        }
-    }
-
     fn format_text_v6(&self, text: &super::symbol::KiText) -> String {
         let x = self.converter.px_to_mm(text.x);
         let y = self.converter.px_to_mm(text.y);
@@ -486,7 +365,6 @@ impl SymbolExporter {
 #[cfg(test)]
 mod tests {
     use super::{SymbolExporter, SymbolFillColor};
-    use crate::cli::KicadVersion;
     use crate::kicad::symbol::{KiPin, KiRectangle, KiSymbol, PinStyle, PinType};
 
     fn test_symbol(fill: bool) -> KiSymbol {
@@ -527,7 +405,7 @@ mod tests {
 
     #[test]
     fn uses_background_fill_when_no_custom_color_is_configured() {
-        let exporter = SymbolExporter::new(KicadVersion::V6, None);
+        let exporter = SymbolExporter::new(None);
         let output = exporter
             .export(&test_symbol(true))
             .expect("symbol export should succeed");
@@ -538,10 +416,9 @@ mod tests {
 
     #[test]
     fn uses_custom_fill_color_when_configured() {
-        let exporter = SymbolExporter::new(
-            KicadVersion::V6,
-            Some(SymbolFillColor::parse("#005C8FCC").expect("color should parse")),
-        );
+        let exporter = SymbolExporter::new(Some(
+            SymbolFillColor::parse("#005C8FCC").expect("color should parse"),
+        ));
         let output = exporter
             .export(&test_symbol(true))
             .expect("symbol export should succeed");

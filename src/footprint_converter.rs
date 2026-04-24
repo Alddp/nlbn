@@ -41,7 +41,7 @@ pub(crate) fn convert_footprint_with_options_and_reporter(
     }
 
     let ee_footprint = FootprintImporter::parse(&component_data.package_detail)?;
-    let converter = Converter::new(options.kicad_version);
+    let converter = Converter::new();
 
     // Convert EasyEDA footprint to KiCad footprint
     let mut ki_footprint = kicad::KiFootprint {

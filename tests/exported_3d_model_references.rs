@@ -48,7 +48,6 @@ fn test_cli(project_relative: bool) -> Cli {
         full: true,
         output: PathBuf::new(),
         overwrite: false,
-        v5: false,
         project_relative,
         symbol_fill_color: None,
         debug: false,

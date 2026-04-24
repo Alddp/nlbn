@@ -38,10 +38,6 @@ pub struct Cli {
     #[arg(long)]
     pub overwrite: bool,
 
-    /// Use KiCad v5 legacy format
-    #[arg(long)]
-    pub v5: bool,
-
     /// Use project-relative paths (KIPRJMOD) instead of footprint-relative paths for 3D models
     #[arg(long)]
     pub project_relative: bool,
@@ -61,10 +57,4 @@ pub struct Cli {
     /// Number of parallel downloads in batch mode (default: 4)
     #[arg(long, default_value = "4")]
     pub parallel: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KicadVersion {
-    V5,
-    V6,
 }
