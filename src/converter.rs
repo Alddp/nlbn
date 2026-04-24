@@ -116,13 +116,13 @@ impl Converter {
         let n = (ux.powi(2) + uy.powi(2)).sqrt();
         let p = ux;
         let sign = if uy < 0.0 { -1.0 } else { 1.0 };
-        let mut theta1 = sign * (p / n).acos();
+        let mut theta1 = sign * safe_acos_ratio(p, n, "start angle")?;
 
         // Compute angle extent
         let n = ((ux.powi(2) + uy.powi(2)) * (vx.powi(2) + vy.powi(2))).sqrt();
         let p = ux * vx + uy * vy;
         let sign = if ux * vy - uy * vx < 0.0 { -1.0 } else { 1.0 };
-        let mut dtheta = sign * (p / n).acos();
+        let mut dtheta = sign * safe_acos_ratio(p, n, "angle extent")?;
 
         if !sweep && dtheta > 0.0 {
             dtheta -= 2.0 * std::f64::consts::PI;
@@ -173,6 +173,18 @@ impl Converter {
 
         Some((min_x, min_y, max_x, max_y))
     }
+}
+
+fn safe_acos_ratio(numerator: f64, denominator: f64, context: &str) -> Result<f64> {
+    if denominator.abs() < 1e-12 {
+        return Err(ConversionError::ArcConversion(format!(
+            "{} denominator is too small",
+            context
+        ))
+        .into());
+    }
+
+    Ok((numerator / denominator).clamp(-1.0, 1.0).acos())
 }
 
 /// Sanitize a component name for use as a filename/identifier
@@ -228,5 +240,28 @@ mod tests {
         let converter = Converter::new(KicadVersion::V6);
         let result = converter.deg_to_rad(180.0);
         assert!((result - std::f64::consts::PI).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_compute_arc_center_for_quarter_circle() {
+        let converter = Converter::new(KicadVersion::V6);
+        let (cx, cy, theta1, theta2) = converter
+            .compute_arc_center((1.0, 0.0), (0.0, 1.0), (1.0, 1.0), 0.0, false, true)
+            .unwrap();
+
+        assert!(cx.abs() < 1e-6);
+        assert!(cy.abs() < 1e-6);
+        assert!(theta1.is_finite());
+        assert!(theta2.is_finite());
+    }
+
+    #[test]
+    fn test_compute_arc_center_rejects_identical_points() {
+        let converter = Converter::new(KicadVersion::V6);
+        let error = converter
+            .compute_arc_center((1.0, 1.0), (1.0, 1.0), (1.0, 1.0), 0.0, false, true)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("identical"));
     }
 }

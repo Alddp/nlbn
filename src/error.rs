@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -62,6 +63,14 @@ pub enum AppError {
     #[error(transparent)]
     Conversion(#[from] ConversionError),
 
+    #[error("I/O error while {action} {path}: {source}")]
+    IoContext {
+        action: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
 
@@ -70,3 +79,17 @@ pub enum AppError {
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
+
+impl AppError {
+    pub fn io_context(
+        action: &'static str,
+        path: impl Into<PathBuf>,
+        source: std::io::Error,
+    ) -> Self {
+        Self::IoContext {
+            action,
+            path: path.into(),
+            source,
+        }
+    }
+}

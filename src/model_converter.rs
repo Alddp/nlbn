@@ -1,14 +1,25 @@
 use crate::converter::sanitize_name;
 use crate::easyeda::{ComponentData, EasyedaApi};
-use crate::error::Result;
+use crate::error::{KicadError, Result};
 use crate::kicad::ModelExporter;
 use crate::library::LibraryManager;
+use crate::reporting::{ConversionReporter, noop_reporter};
 
 pub async fn convert_3d_model(
     api: &EasyedaApi,
     component_data: &ComponentData,
     lib_manager: &LibraryManager,
     lcsc_id: &str,
+) -> Result<()> {
+    convert_3d_model_with_reporter(api, component_data, lib_manager, lcsc_id, noop_reporter()).await
+}
+
+pub(crate) async fn convert_3d_model_with_reporter(
+    api: &EasyedaApi,
+    component_data: &ComponentData,
+    lib_manager: &LibraryManager,
+    lcsc_id: &str,
+    reporter: &dyn ConversionReporter,
 ) -> Result<()> {
     if let Some(model_info) = &component_data.model_3d {
         log::info!("Converting 3D model...");
@@ -20,6 +31,7 @@ pub async fn convert_3d_model(
         let mut has_step = false;
         let mut wrote_wrl = false;
         let mut wrote_step = false;
+        let mut issues = Vec::new();
 
         let wrl_path = lib_manager.get_wrl_path(&model_name);
         let step_path = lib_manager.get_step_path(&model_name);
@@ -27,7 +39,10 @@ pub async fn convert_3d_model(
         let should_write_step = lib_manager.should_write_file(&step_path);
 
         if !should_write_wrl && !should_write_step {
-            println!("\u{2713} 3D model kept: {} (WRL + STEP)", model_name);
+            reporter.emit_output_line(&format!(
+                "\u{2713} 3D model kept: {} (WRL + STEP)",
+                model_name
+            ));
             return Ok(());
         }
 
@@ -63,12 +78,21 @@ pub async fn convert_3d_model(
                                 log::info!("\u{2713} WRL model converted: {}", model_name);
                             }
                         }
-                        Err(e) => log::warn!("Failed to write WRL model: {}", e),
+                        Err(error) => {
+                            issues.push(format!("failed to write WRL model: {}", error));
+                            log::warn!("Failed to write WRL model: {}", error);
+                        }
                     }
                 }
-                Err(e) => log::warn!("Failed to convert OBJ to WRL: {}", e),
+                Err(error) => {
+                    issues.push(format!("failed to convert OBJ to WRL: {}", error));
+                    log::warn!("Failed to convert OBJ to WRL: {}", error);
+                }
             },
-            Some(Err(e)) => log::warn!("Failed to download OBJ model: {}", e),
+            Some(Err(error)) => {
+                issues.push(format!("failed to download OBJ model: {}", error));
+                log::warn!("Failed to download OBJ model: {}", error);
+            }
             None => {
                 has_wrl = wrl_path.is_file();
             }
@@ -85,10 +109,16 @@ pub async fn convert_3d_model(
                             log::info!("\u{2713} STEP model converted: {}", model_name);
                         }
                     }
-                    Err(e) => log::warn!("Failed to write STEP model: {}", e),
+                    Err(error) => {
+                        issues.push(format!("failed to write STEP model: {}", error));
+                        log::warn!("Failed to write STEP model: {}", error);
+                    }
                 }
             }
-            Some(Err(e)) => log::warn!("Failed to download STEP model: {}", e),
+            Some(Err(error)) => {
+                issues.push(format!("failed to download STEP model: {}", error));
+                log::warn!("Failed to download STEP model: {}", error);
+            }
             None => {
                 has_step = step_path.is_file();
             }
@@ -101,13 +131,35 @@ pub async fn convert_3d_model(
         };
 
         match (has_wrl, has_step) {
-            (true, true) => println!("\u{2713} 3D model {}: {} (WRL + STEP)", action, model_name),
-            (true, false) => println!("\u{2713} 3D model {}: {} (WRL only)", action, model_name),
-            (false, true) => println!("\u{2713} 3D model {}: {} (STEP only)", action, model_name),
-            (false, false) => println!("\u{26a0} 3D model not available"),
+            (true, true) => reporter.emit_output_line(&format!(
+                "\u{2713} 3D model {}: {} (WRL + STEP)",
+                action, model_name
+            )),
+            (true, false) => reporter.emit_output_line(&format!(
+                "\u{2713} 3D model {}: {} (WRL only)",
+                action, model_name
+            )),
+            (false, true) => reporter.emit_output_line(&format!(
+                "\u{2713} 3D model {}: {} (STEP only)",
+                action, model_name
+            )),
+            (false, false) => {
+                let detail = if issues.is_empty() {
+                    format!("3D model unavailable for {}", model_name)
+                } else {
+                    format!(
+                        "3D model unavailable for {}: {}",
+                        model_name,
+                        issues.join("; ")
+                    )
+                };
+                return Err(KicadError::ModelExport(detail).into());
+            }
         }
     } else {
-        log::warn!("No 3D model metadata available for this component");
+        let detail = format!("No 3D model metadata available for {}", lcsc_id);
+        log::warn!("{}", detail);
+        return Err(KicadError::ModelExport(detail).into());
     }
 
     Ok(())

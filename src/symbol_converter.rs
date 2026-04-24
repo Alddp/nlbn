@@ -1,15 +1,34 @@
 use crate::cli::Cli;
-use crate::converter::{Converter, sanitize_name};
+use crate::converter::sanitize_name;
 use crate::easyeda::{ComponentData, SymbolImporter};
 use crate::error::Result;
+use crate::export_options::SymbolExportOptions;
 use crate::kicad;
 use crate::library::LibraryManager;
+use crate::reporting::{ConversionReporter, noop_reporter};
 
 pub fn convert_symbol(
     args: &Cli,
     component_data: &ComponentData,
     lib_manager: &LibraryManager,
     lcsc_id: &str,
+) -> Result<()> {
+    let options = SymbolExportOptions::from_cli(args)?;
+    convert_symbol_with_options_and_reporter(
+        &options,
+        component_data,
+        lib_manager,
+        lcsc_id,
+        noop_reporter(),
+    )
+}
+
+pub(crate) fn convert_symbol_with_options_and_reporter(
+    options: &SymbolExportOptions,
+    component_data: &ComponentData,
+    lib_manager: &LibraryManager,
+    lcsc_id: &str,
+    reporter: &dyn ConversionReporter,
 ) -> Result<()> {
     let ee_symbol = SymbolImporter::parse(&component_data.data_str)?;
 
@@ -35,9 +54,6 @@ pub fn convert_symbol(
         texts: Vec::new(),
     };
 
-    // Convert pins with bbox adjustment
-    let _converter = Converter::new(args.kicad_version());
-
     log::debug!(
         "bbox_x = {}, bbox_y = {}",
         component_data.bbox_x,
@@ -48,18 +64,6 @@ pub fn convert_symbol(
         let adjusted_x = ee_pin.x - component_data.bbox_x;
         let adjusted_y = ee_pin.y - component_data.bbox_y;
 
-        if ee_pin.name.contains("PG10") {
-            log::info!(
-                "PG10 pin: raw x={}, y={}, adjusted x={}, y={}, final y={}",
-                ee_pin.x,
-                ee_pin.y,
-                adjusted_x,
-                adjusted_y,
-                -adjusted_y
-            );
-        }
-
-        // Log pins with unusual length
         if ee_pin.length >= 100.0 {
             log::warn!(
                 "Pin {} ({}) has unusual length: {}",
@@ -81,7 +85,7 @@ pub fn convert_symbol(
                 kicad::PinStyle::Line
             },
             pos_x: adjusted_x,
-            pos_y: -adjusted_y, // Back to negation to test
+            pos_y: -adjusted_y,
             rotation: ee_pin.rotation,
             length: ee_pin.length,
         });
@@ -96,9 +100,9 @@ pub fn convert_symbol(
 
         ki_symbol.rectangles.push(kicad::KiRectangle {
             x1: adjusted_x,
-            y1: adjusted_y, // No negation
+            y1: adjusted_y,
             x2: adjusted_x2,
-            y2: adjusted_y2, // No negation
+            y2: adjusted_y2,
             stroke_width: ee_rect.stroke_width,
             fill: true,
         });
@@ -111,7 +115,7 @@ pub fn convert_symbol(
 
         ki_symbol.circles.push(kicad::KiCircle {
             cx: adjusted_cx,
-            cy: adjusted_cy, // No negation
+            cy: adjusted_cy,
             radius: ee_circle.radius,
             stroke_width: ee_circle.stroke_width,
             fill: ee_circle.fill,
@@ -129,7 +133,7 @@ pub fn convert_symbol(
 
         ki_symbol.circles.push(kicad::KiCircle {
             cx: adjusted_cx,
-            cy: adjusted_cy, // No negation
+            cy: adjusted_cy,
             radius,
             stroke_width: ee_ellipse.stroke_width,
             fill: ee_ellipse.fill,
@@ -181,11 +185,7 @@ pub fn convert_symbol(
         let adjusted_points: Vec<(f64, f64)> = ee_polyline
             .points
             .iter()
-            .map(|(x, y)| {
-                let adj_x = x - component_data.bbox_x;
-                let adj_y = component_data.bbox_y - y; // bbox_y - pos_y
-                (adj_x, adj_y) // No negation
-            })
+            .map(|(x, y)| (x - component_data.bbox_x, component_data.bbox_y - y))
             .collect();
 
         ki_symbol.polylines.push(kicad::KiPolyline {
@@ -200,11 +200,7 @@ pub fn convert_symbol(
         let adjusted_points: Vec<(f64, f64)> = ee_polygon
             .points
             .iter()
-            .map(|(x, y)| {
-                let adj_x = x - component_data.bbox_x;
-                let adj_y = component_data.bbox_y - y; // bbox_y - pos_y
-                (adj_x, adj_y) // No negation
-            })
+            .map(|(x, y)| (x - component_data.bbox_x, component_data.bbox_y - y))
             .collect();
 
         ki_symbol.polylines.push(kicad::KiPolyline {
@@ -286,21 +282,20 @@ pub fn convert_symbol(
     }
 
     // Export symbol
-    let exporter =
-        kicad::SymbolExporter::new(args.kicad_version(), args.parsed_symbol_fill_color()?);
+    let exporter = kicad::SymbolExporter::new(options.kicad_version, options.symbol_fill_color);
     let symbol_data = exporter.export(&ki_symbol)?;
 
-    let lib_path = lib_manager.get_symbol_lib_path(args.v5);
+    let lib_path = lib_manager.get_symbol_lib_path(options.v5);
 
     // Use thread-safe add_or_update method
-    lib_manager.add_or_update_component(
+    lib_manager.stage_or_update_component(
         &lib_path,
         &ki_symbol.name,
         &symbol_data,
-        args.overwrite,
+        options.overwrite,
     )?;
 
-    println!("\u{2713} Symbol converted: {}", ki_symbol.name);
+    reporter.emit_output_line(&format!("\u{2713} Symbol converted: {}", ki_symbol.name));
 
     Ok(())
 }

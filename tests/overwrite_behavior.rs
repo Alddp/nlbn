@@ -1,7 +1,7 @@
 use nlbn::converter::sanitize_name;
 use nlbn::easyeda::{ComponentData, Model3dInfo};
 use nlbn::footprint_converter::convert_footprint;
-use nlbn::{Cli, LibraryManager};
+use nlbn::{Cli, LibraryManager, RunRequest};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -251,7 +251,7 @@ fn existing_3d_outputs_are_replaced_with_overwrite() {
 }
 
 #[test]
-fn cli_validate_propagates_overwrite_to_new_library_manager() {
+fn run_request_building_does_not_change_library_manager_defaults() {
     let workspace = TestWorkspace::new("default-overwrite");
     let output_dir = workspace.library_dir();
     let args = Cli {
@@ -259,9 +259,19 @@ fn cli_validate_propagates_overwrite_to_new_library_manager() {
         ..test_cli(true)
     };
 
-    args.validate().expect("cli should validate");
+    RunRequest::try_from(args).expect("run request should build");
 
     let lib_manager = LibraryManager::new(&output_dir);
+
+    assert!(!lib_manager.overwrite_enabled());
+}
+
+#[test]
+fn explicit_library_manager_overwrite_is_preserved() {
+    let workspace = TestWorkspace::new("explicit-overwrite");
+    let output_dir = workspace.library_dir();
+
+    let lib_manager = LibraryManager::with_overwrite(&output_dir, true);
 
     assert!(lib_manager.overwrite_enabled());
 }

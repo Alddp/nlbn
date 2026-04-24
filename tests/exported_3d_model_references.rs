@@ -1,6 +1,7 @@
 use nlbn::converter::sanitize_name;
-use nlbn::easyeda::{ComponentData, Model3dInfo};
+use nlbn::easyeda::{ComponentData, EasyedaApi, Model3dInfo};
 use nlbn::footprint_converter::convert_footprint;
+use nlbn::model_converter::convert_3d_model;
 use nlbn::{Cli, LibraryManager};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,6 +78,12 @@ fn test_component_data() -> ComponentData {
     }
 }
 
+fn component_data_without_model() -> ComponentData {
+    let mut data = test_component_data();
+    data.model_3d = None;
+    data
+}
+
 fn expected_names(component_data: &ComponentData, lcsc_id: &str) -> (String, String) {
     (
         format!("{}_{}", sanitize_name(&component_data.title), lcsc_id),
@@ -117,6 +124,10 @@ fn extract_model_path(footprint: &str) -> &str {
     &footprint[start..end]
 }
 
+fn has_model_reference(footprint: &str) -> bool {
+    footprint.contains("(model \"")
+}
+
 fn expected_model_path(model_name: &str, project_relative: bool, extension: &str) -> String {
     if project_relative {
         format!(
@@ -129,7 +140,7 @@ fn expected_model_path(model_name: &str, project_relative: bool, extension: &str
 }
 
 #[test]
-fn defaults_to_wrl_reference_when_no_3d_files_exist() {
+fn omits_model_reference_when_no_3d_files_exist() {
     let workspace = TestWorkspace::new("default-wrl");
     let output_dir = workspace.library_dir();
     let lib_manager = LibraryManager::new(&output_dir);
@@ -139,16 +150,13 @@ fn defaults_to_wrl_reference_when_no_3d_files_exist() {
 
     let args = test_cli(false);
     let component_data = test_component_data();
-    let (footprint_name, model_name) = expected_names(&component_data, "C123456");
+    let (footprint_name, _) = expected_names(&component_data, "C123456");
 
     convert_footprint(&args, &component_data, &lib_manager, "C123456")
         .expect("footprint conversion should succeed");
 
     let content = footprint_content(&output_dir, &footprint_name);
-    assert_eq!(
-        extract_model_path(&content),
-        expected_model_path(&model_name, false, "wrl")
-    );
+    assert!(!has_model_reference(&content));
 }
 
 #[test]
@@ -224,5 +232,28 @@ fn uses_kiprjmod_model_path_when_project_relative_mode_is_enabled() {
     assert_eq!(
         extract_model_path(&content),
         expected_model_path(&model_name, true, "wrl")
+    );
+}
+
+#[tokio::test]
+async fn convert_3d_model_errors_when_metadata_is_missing() {
+    let workspace = TestWorkspace::new("missing-3d-metadata");
+    let output_dir = workspace.library_dir();
+    let lib_manager = LibraryManager::new(&output_dir);
+    lib_manager
+        .create_directories()
+        .expect("should create library directories");
+
+    let api = EasyedaApi::new();
+    let component_data = component_data_without_model();
+
+    let error = convert_3d_model(&api, &component_data, &lib_manager, "C123456")
+        .await
+        .expect_err("missing metadata should fail explicit 3D export");
+
+    assert!(
+        error
+            .to_string()
+            .contains("No 3D model metadata available for C123456")
     );
 }

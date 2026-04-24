@@ -1,16 +1,16 @@
-use crate::error::{KicadError, Result};
+use crate::error::{AppError, KicadError, Result};
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-static SYMBOL_WRITE_LOCK: Mutex<()> = Mutex::new(());
-static DEFAULT_OVERWRITE: AtomicBool = AtomicBool::new(false);
-
-pub fn set_default_overwrite(overwrite: bool) {
-    DEFAULT_OVERWRITE.store(overwrite, Ordering::Relaxed);
+#[derive(Debug, Default)]
+struct SymbolLibrarySession {
+    content: String,
+    dirty: bool,
+    component_names: HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,11 +41,13 @@ pub struct LibraryManager {
     output_path: PathBuf,
     lib_name: String,
     overwrite: bool,
+    write_lock: Mutex<()>,
+    symbol_sessions: Mutex<HashMap<PathBuf, SymbolLibrarySession>>,
 }
 
 impl LibraryManager {
     pub fn new(output_path: &Path) -> Self {
-        Self::with_overwrite(output_path, DEFAULT_OVERWRITE.load(Ordering::Relaxed))
+        Self::with_overwrite(output_path, false)
     }
 
     pub fn with_overwrite(output_path: &Path, overwrite: bool) -> Self {
@@ -58,6 +60,8 @@ impl LibraryManager {
             output_path: output_path.to_path_buf(),
             lib_name,
             overwrite,
+            write_lock: Mutex::new(()),
+            symbol_sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -76,15 +80,21 @@ impl LibraryManager {
     /// Create necessary output directories
     pub fn create_directories(&self) -> Result<()> {
         // Create main output directory
-        fs::create_dir_all(&self.output_path).map_err(KicadError::Io)?;
+        fs::create_dir_all(&self.output_path).map_err(|error| {
+            AppError::io_context("create output directory", &self.output_path, error)
+        })?;
 
         // Create .pretty directory for footprints
         let pretty_dir = self.output_path.join(format!("{}.pretty", self.lib_name));
-        fs::create_dir_all(&pretty_dir).map_err(KicadError::Io)?;
+        fs::create_dir_all(&pretty_dir).map_err(|error| {
+            AppError::io_context("create footprint directory", &pretty_dir, error)
+        })?;
 
         // Create .3dshapes directory for 3D models
         let shapes_dir = self.output_path.join(format!("{}.3dshapes", self.lib_name));
-        fs::create_dir_all(&shapes_dir).map_err(KicadError::Io)?;
+        fs::create_dir_all(&shapes_dir).map_err(|error| {
+            AppError::io_context("create 3D model directory", &shapes_dir, error)
+        })?;
 
         Ok(())
     }
@@ -92,29 +102,30 @@ impl LibraryManager {
     /// Check if a component exists in the library file
     /// Note: This should only be called within a lock if used for write decisions
     pub fn component_exists(&self, lib_path: &Path, component_name: &str) -> Result<bool> {
+        if let Ok(sessions) = self.symbol_sessions.lock()
+            && let Some(session) = sessions.get(lib_path)
+        {
+            return Ok(session.component_names.contains(component_name));
+        }
+
         if !lib_path.exists() {
             return Ok(false);
         }
 
-        let content = fs::read_to_string(lib_path).map_err(KicadError::Io)?;
+        let content = fs::read_to_string(lib_path)
+            .map_err(|error| AppError::io_context("read symbol library", lib_path, error))?;
+        Ok(collect_component_names(&content).contains(component_name))
+    }
 
-        // Check for v6 format
-        let v6_pattern = format!(r#"\(symbol\s+"{}""#, regex::escape(component_name));
-        if let Ok(re) = Regex::new(&v6_pattern) {
-            if re.is_match(&content) {
-                return Ok(true);
-            }
-        }
-
-        // Check for v5 format
-        let v5_pattern = format!(r"DEF\s+{}\s+", regex::escape(component_name));
-        if let Ok(re) = Regex::new(&v5_pattern) {
-            if re.is_match(&content) {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
+    pub fn stage_or_update_component(
+        &self,
+        lib_path: &Path,
+        component_name: &str,
+        component_data: &str,
+        overwrite: bool,
+    ) -> Result<()> {
+        let _lock = self.write_lock.lock().unwrap();
+        self.stage_or_update_component_locked(lib_path, component_name, component_data, overwrite)
     }
 
     /// Add or update a component in the library file (thread-safe)
@@ -125,170 +136,62 @@ impl LibraryManager {
         component_data: &str,
         overwrite: bool,
     ) -> Result<()> {
-        // Lock to prevent concurrent writes and check-then-act race conditions
-        let _lock = SYMBOL_WRITE_LOCK.lock().unwrap();
-
-        // Check if component exists (within lock to prevent TOCTOU)
-        let exists = if lib_path.exists() {
-            let content = fs::read_to_string(lib_path).map_err(KicadError::Io)?;
-
-            let v6_pattern = format!(r#"\(symbol\s+"{}""#, regex::escape(component_name));
-            if let Ok(re) = Regex::new(&v6_pattern) {
-                re.is_match(&content)
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if exists && overwrite {
-            // Update existing component
-            self.update_component_internal(lib_path, component_name, component_data)?;
-        } else if !exists {
-            // Add new component
-            self.add_component_internal(lib_path, component_data)?;
-        }
-        // If exists and !overwrite, do nothing
-
-        Ok(())
+        let _lock = self.write_lock.lock().unwrap();
+        self.stage_or_update_component_locked(lib_path, component_name, component_data, overwrite)?;
+        self.flush_symbol_libraries_locked()
     }
 
-    /// Internal add component (assumes lock is held)
-    fn add_component_internal(&self, lib_path: &Path, component_data: &str) -> Result<()> {
-        let mut content = if lib_path.exists() {
-            let existing = fs::read_to_string(lib_path).map_err(KicadError::Io)?;
-            existing.trim_end().trim_end_matches(')').to_string()
-        } else {
-            if component_data.contains("(symbol") {
-                String::from("(kicad_symbol_lib\n  (version 20211014)\n  (generator nlbn)")
-            } else {
-                String::from("EESchema-LIBRARY Version 2.4\n#encoding utf-8")
-            }
-        };
-
-        content.push('\n');
-        content.push_str(component_data);
-
-        if component_data.contains("(symbol") {
-            content.push('\n');
-            content.push(')');
-        }
-        content.push('\n');
-
-        fs::write(lib_path, content).map_err(KicadError::Io)?;
-
-        Ok(())
+    pub fn flush_symbol_libraries(&self) -> Result<()> {
+        let _lock = self.write_lock.lock().unwrap();
+        self.flush_symbol_libraries_locked()
     }
 
-    /// Internal update component (assumes lock is held)
-    fn update_component_internal(
+    fn stage_or_update_component_locked(
         &self,
         lib_path: &Path,
         component_name: &str,
-        new_data: &str,
+        component_data: &str,
+        overwrite: bool,
     ) -> Result<()> {
-        let content = fs::read_to_string(lib_path).map_err(KicadError::Io)?;
+        let mut sessions = self.symbol_sessions.lock().unwrap();
+        let session = get_or_load_symbol_session(&mut sessions, lib_path)?;
+        let exists = session.component_names.contains(component_name);
 
-        // Try v6 format: find symbol block by matching parentheses
-        let search = format!(r#"(symbol "{}""#, component_name);
-        if let Some(start) = content.find(&search) {
-            // Walk back to consume leading whitespace/newline before (symbol
-            let mut block_start = start;
-            while block_start > 0 && content.as_bytes()[block_start - 1] == b' ' {
-                block_start -= 1;
-            }
-            if block_start > 0 && content.as_bytes()[block_start - 1] == b'\n' {
-                block_start -= 1;
-            }
-
-            // Count parentheses from start to find the matching close
-            let mut depth = 0;
-            let mut block_end = start;
-            for (i, ch) in content[start..].char_indices() {
-                match ch {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            block_end = start + i + 1;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if block_end > start {
-                let mut new_content = String::with_capacity(content.len());
-                new_content.push_str(&content[..block_start]);
-                new_content.push('\n');
-                new_content.push_str(new_data);
-                new_content.push_str(&content[block_end..]);
-                fs::write(lib_path, &new_content).map_err(KicadError::Io)?;
-                return Ok(());
-            }
+        if exists && overwrite {
+            session.content =
+                update_component_in_content(&session.content, component_name, component_data)?;
+            session.dirty = true;
+        } else if !exists {
+            session.content = add_component_to_content(&session.content, component_data);
+            session.component_names.insert(component_name.to_string());
+            session.dirty = true;
         }
 
-        // Try v5 format
-        let v5_start = format!("DEF {} ", component_name);
-        if let Some(start) = content.find(&v5_start) {
-            if let Some(end_offset) = content[start..].find("ENDDEF") {
-                let block_end = start + end_offset + "ENDDEF".len();
-                // Skip trailing newline
-                let block_end = if content[block_end..].starts_with('\n') {
-                    block_end + 1
-                } else {
-                    block_end
-                };
-                let mut new_content = String::with_capacity(content.len());
-                new_content.push_str(&content[..start]);
-                new_content.push_str(new_data);
-                new_content.push_str(&content[block_end..]);
-                fs::write(lib_path, &new_content).map_err(KicadError::Io)?;
-                return Ok(());
-            }
-        }
+        Ok(())
+    }
 
-        Err(
-            KicadError::SymbolExport(format!("Component {} not found in library", component_name))
-                .into(),
-        )
+    fn flush_symbol_libraries_locked(&self) -> Result<()> {
+        let mut sessions = self.symbol_sessions.lock().unwrap();
+        for (path, session) in sessions.iter_mut() {
+            if !session.dirty {
+                continue;
+            }
+            Self::atomic_write(path, session.content.as_bytes(), 64 * 1024)
+                .map_err(|error| AppError::io_context("write symbol library", path, error))?;
+            log::info!("Wrote symbol library: {}", path.display());
+            session.dirty = false;
+        }
+        Ok(())
     }
 
     /// Add a component to the library file
     pub fn add_component(&self, lib_path: &Path, component_data: &str) -> Result<()> {
-        // Lock to prevent concurrent writes to the same symbol library file
-        let _lock = SYMBOL_WRITE_LOCK.lock().unwrap();
-
-        let mut content = if lib_path.exists() {
-            // Read existing file and remove the closing parenthesis
-            let existing = fs::read_to_string(lib_path).map_err(KicadError::Io)?;
-            // Remove trailing ')' and whitespace
-            existing.trim_end().trim_end_matches(')').to_string()
-        } else {
-            // Create new library file with header (v6 format with proper formatting)
-            if component_data.contains("(symbol") {
-                // v6 format - match Python's formatting exactly
-                String::from("(kicad_symbol_lib\n  (version 20211014)\n  (generator nlbn)")
-            } else {
-                // v5 format
-                String::from("EESchema-LIBRARY Version 2.4\n#encoding utf-8")
-            }
-        };
-
-        // Append component
-        content.push('\n');
-        content.push_str(component_data);
-
-        // Add closing parenthesis for v6 format
-        if component_data.contains("(symbol") {
-            content.push('\n');
-            content.push(')');
-        }
-        content.push('\n');
-
-        fs::write(lib_path, content).map_err(KicadError::Io)?;
-
+        let _lock = self.write_lock.lock().unwrap();
+        let current_content = load_symbol_library_content(lib_path)?;
+        let new_content = add_component_to_content(&current_content, component_data);
+        Self::atomic_write(lib_path, new_content.as_bytes(), 64 * 1024)
+            .map_err(|error| AppError::io_context("write symbol library", lib_path, error))?;
+        self.replace_symbol_session_content(lib_path, new_content);
         Ok(())
     }
 
@@ -299,63 +202,13 @@ impl LibraryManager {
         component_name: &str,
         new_data: &str,
     ) -> Result<()> {
-        // Lock to prevent concurrent writes to the same symbol library file
-        let _lock = SYMBOL_WRITE_LOCK.lock().unwrap();
-
-        let content = fs::read_to_string(lib_path).map_err(KicadError::Io)?;
-
-        // Try v6 format: find symbol block by matching parentheses
-        let search = format!(r#"(symbol "{}""#, component_name);
-        if let Some(start) = content.find(&search) {
-            let block_start = content[..start].rfind('(').unwrap_or(start);
-            let mut depth = 0;
-            let mut block_end = block_start;
-            for (i, ch) in content[block_start..].char_indices() {
-                match ch {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            block_end = block_start + i + 1;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if block_end > block_start {
-                let mut new_content = String::with_capacity(content.len());
-                new_content.push_str(&content[..block_start]);
-                new_content.push_str(new_data);
-                new_content.push_str(&content[block_end..]);
-                fs::write(lib_path, &new_content).map_err(KicadError::Io)?;
-                return Ok(());
-            }
-        }
-
-        // Try v5 format
-        let v5_start = format!("DEF {} ", component_name);
-        if let Some(start) = content.find(&v5_start) {
-            if let Some(end_offset) = content[start..].find("ENDDEF") {
-                let block_end = start + end_offset + "ENDDEF".len();
-                let block_end = if content[block_end..].starts_with('\n') {
-                    block_end + 1
-                } else {
-                    block_end
-                };
-                let mut new_content = String::with_capacity(content.len());
-                new_content.push_str(&content[..start]);
-                new_content.push_str(new_data);
-                new_content.push_str(&content[block_end..]);
-                fs::write(lib_path, &new_content).map_err(KicadError::Io)?;
-                return Ok(());
-            }
-        }
-
-        Err(
-            KicadError::SymbolExport(format!("Component {} not found in library", component_name))
-                .into(),
-        )
+        let _lock = self.write_lock.lock().unwrap();
+        let content = load_symbol_library_content(lib_path)?;
+        let new_content = update_component_in_content(&content, component_name, new_data)?;
+        Self::atomic_write(lib_path, new_content.as_bytes(), 64 * 1024)
+            .map_err(|error| AppError::io_context("write symbol library", lib_path, error))?;
+        self.replace_symbol_session_content(lib_path, new_content);
+        Ok(())
     }
 
     /// Atomic write: write to temp file with buffered I/O, then rename
@@ -387,7 +240,8 @@ impl LibraryManager {
             return Ok(WriteOutcome::Skipped(path.to_path_buf()));
         }
 
-        Self::atomic_write(path, data, buf_size).map_err(KicadError::Io)?;
+        Self::atomic_write(path, data, buf_size)
+            .map_err(|error| AppError::io_context("write output file", path, error))?;
         log::info!("Wrote {}: {}", kind, path.display());
         Ok(WriteOutcome::Written(path.to_path_buf()))
     }
@@ -494,5 +348,326 @@ impl LibraryManager {
             self.output_path
                 .join(format!("{}.kicad_sym", self.lib_name))
         }
+    }
+
+    fn replace_symbol_session_content(&self, lib_path: &Path, content: String) {
+        if let Ok(mut sessions) = self.symbol_sessions.lock() {
+            let component_names = collect_component_names(&content);
+            sessions.insert(
+                lib_path.to_path_buf(),
+                SymbolLibrarySession {
+                    content,
+                    dirty: false,
+                    component_names,
+                },
+            );
+        }
+    }
+}
+
+fn get_or_load_symbol_session<'a>(
+    sessions: &'a mut HashMap<PathBuf, SymbolLibrarySession>,
+    lib_path: &Path,
+) -> Result<&'a mut SymbolLibrarySession> {
+    if !sessions.contains_key(lib_path) {
+        let content = load_symbol_library_content(lib_path)?;
+        let component_names = collect_component_names(&content);
+        sessions.insert(
+            lib_path.to_path_buf(),
+            SymbolLibrarySession {
+                content,
+                dirty: false,
+                component_names,
+            },
+        );
+    }
+
+    Ok(sessions
+        .get_mut(lib_path)
+        .expect("symbol session should exist after insertion"))
+}
+
+fn load_symbol_library_content(lib_path: &Path) -> Result<String> {
+    if lib_path.exists() {
+        fs::read_to_string(lib_path)
+            .map_err(|error| AppError::io_context("read symbol library", lib_path, error))
+    } else {
+        Ok(String::new())
+    }
+}
+
+fn collect_component_names(content: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+
+    if let Ok(v6) = Regex::new(r#"\(symbol\s+"([^"]+)""#) {
+        for captures in v6.captures_iter(content) {
+            if let Some(name) = captures.get(1) {
+                names.insert(name.as_str().to_string());
+            }
+        }
+    }
+
+    if let Ok(v5) = Regex::new(r"(?m)^DEF\s+(\S+)\s+") {
+        for captures in v5.captures_iter(content) {
+            if let Some(name) = captures.get(1) {
+                names.insert(name.as_str().to_string());
+            }
+        }
+    }
+
+    names
+}
+
+fn add_component_to_content(existing_content: &str, component_data: &str) -> String {
+    let mut content = if existing_content.is_empty() {
+        if component_data.contains("(symbol") {
+            String::from("(kicad_symbol_lib\n  (version 20211014)\n  (generator nlbn)")
+        } else {
+            String::from("EESchema-LIBRARY Version 2.4\n#encoding utf-8")
+        }
+    } else {
+        existing_content
+            .trim_end()
+            .trim_end_matches(')')
+            .to_string()
+    };
+
+    content.push('\n');
+    content.push_str(component_data);
+
+    if component_data.contains("(symbol") {
+        content.push('\n');
+        content.push(')');
+    }
+    content.push('\n');
+
+    content
+}
+
+fn update_component_in_content(
+    content: &str,
+    component_name: &str,
+    new_data: &str,
+) -> Result<String> {
+    let search = format!(r#"(symbol "{}""#, component_name);
+    if let Some(start) = content.find(&search) {
+        let block_start = find_v6_block_start(content, start);
+        if let Some(block_end) = find_matching_paren_end(content, start) {
+            let mut new_content = String::with_capacity(content.len());
+            new_content.push_str(&content[..block_start]);
+            if block_start > 0 && !content[..block_start].ends_with('\n') {
+                new_content.push('\n');
+            }
+            new_content.push_str(new_data);
+            new_content.push_str(&content[block_end..]);
+            return Ok(new_content);
+        }
+    }
+
+    let v5_start = format!("DEF {} ", component_name);
+    if let Some(start) = content.find(&v5_start)
+        && let Some(end_offset) = content[start..].find("ENDDEF")
+    {
+        let block_end = start + end_offset + "ENDDEF".len();
+        let block_end = if content[block_end..].starts_with('\n') {
+            block_end + 1
+        } else {
+            block_end
+        };
+        let mut new_content = String::with_capacity(content.len());
+        new_content.push_str(&content[..start]);
+        new_content.push_str(new_data);
+        new_content.push_str(&content[block_end..]);
+        return Ok(new_content);
+    }
+
+    Err(
+        KicadError::SymbolExport(format!("Component {} not found in library", component_name))
+            .into(),
+    )
+}
+
+fn find_v6_block_start(content: &str, symbol_start: usize) -> usize {
+    let mut block_start = symbol_start;
+    while block_start > 0 && content.as_bytes()[block_start - 1] == b' ' {
+        block_start -= 1;
+    }
+    if block_start > 0 && content.as_bytes()[block_start - 1] == b'\n' {
+        block_start -= 1;
+    }
+    block_start
+}
+
+fn find_matching_paren_end(content: &str, start: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in content[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(start + index + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LibraryManager, add_component_to_content, update_component_in_content};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_root(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "nlbn_library_tests_{}_{}_{}",
+            name,
+            std::process::id(),
+            stamp
+        ))
+    }
+
+    fn symbol_block(name: &str) -> String {
+        format!("  (symbol \"{}\")", name)
+    }
+
+    fn symbol_block_with_property(name: &str, value: &str) -> String {
+        format!(
+            "  (symbol \"{}\"\n    (property \"Value\" \"{}\"))",
+            name, value
+        )
+    }
+
+    #[test]
+    fn staged_symbol_updates_are_flushed_together() {
+        let root = test_root("stage_flush");
+        let output_dir = root.join("demo-lib");
+        let manager = LibraryManager::new(&output_dir);
+        manager.create_directories().unwrap();
+
+        let lib_path = manager.get_symbol_lib_path(false);
+        manager
+            .stage_or_update_component(&lib_path, "A", &symbol_block("A"), false)
+            .unwrap();
+        manager
+            .stage_or_update_component(&lib_path, "B", &symbol_block("B"), false)
+            .unwrap();
+
+        assert!(!lib_path.exists());
+
+        manager.flush_symbol_libraries().unwrap();
+
+        let content = fs::read_to_string(&lib_path).unwrap();
+        assert!(content.contains("(symbol \"A\")"));
+        assert!(content.contains("(symbol \"B\")"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_symbol_overwrite_updates_buffered_content() {
+        let root = test_root("stage_overwrite");
+        let output_dir = root.join("demo-lib");
+        let manager = LibraryManager::with_overwrite(&output_dir, true);
+        manager.create_directories().unwrap();
+
+        let lib_path = manager.get_symbol_lib_path(false);
+        manager
+            .stage_or_update_component(&lib_path, "A", &symbol_block("A"), false)
+            .unwrap();
+        manager.flush_symbol_libraries().unwrap();
+
+        manager
+            .stage_or_update_component(
+                &lib_path,
+                "A",
+                "  (symbol \"A\"\n    (property \"Value\" \"Updated\"))",
+                true,
+            )
+            .unwrap();
+        manager.flush_symbol_libraries().unwrap();
+
+        let content = fs::read_to_string(&lib_path).unwrap();
+        assert!(content.contains("Updated"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn immediate_symbol_update_still_writes_file() {
+        let root = test_root("immediate_write");
+        let output_dir = root.join("demo-lib");
+        let manager = LibraryManager::new(&output_dir);
+        manager.create_directories().unwrap();
+
+        let lib_path = manager.get_symbol_lib_path(false);
+        manager
+            .add_or_update_component(&lib_path, "A", &symbol_block("A"), false)
+            .unwrap();
+
+        assert!(lib_path.exists());
+        let content = fs::read_to_string(&lib_path).unwrap();
+        assert!(content.contains("(symbol \"A\")"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_handles_parentheses_inside_symbol_properties() {
+        let initial = add_component_to_content(
+            "",
+            &symbol_block_with_property("A", "Before (draft) release"),
+        );
+        let updated = update_component_in_content(
+            &initial,
+            "A",
+            &symbol_block_with_property("A", "After (rev B) release"),
+        )
+        .unwrap();
+
+        assert!(updated.contains("After (rev B) release"));
+        assert!(!updated.contains("Before (draft) release"));
+    }
+
+    #[test]
+    fn overwrite_handles_escaped_quotes_inside_symbol_properties() {
+        let initial =
+            add_component_to_content("", &symbol_block_with_property("A", "Before \\\"A\\\""));
+        let updated = update_component_in_content(
+            &initial,
+            "A",
+            &symbol_block_with_property("A", "After \\\"B\\\" (final)"),
+        )
+        .unwrap();
+
+        assert!(updated.contains("After \\\"B\\\" (final)"));
+        assert!(!updated.contains("Before \\\"A\\\""));
     }
 }

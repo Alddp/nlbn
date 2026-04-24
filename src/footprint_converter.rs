@@ -3,8 +3,10 @@ use crate::converter::{Converter, angle_to_ki, sanitize_name};
 use crate::easyeda::svg_parser::{SvgCommand, parse_svg_path};
 use crate::easyeda::{ComponentData, FootprintImporter};
 use crate::error::Result;
+use crate::export_options::FootprintExportOptions;
 use crate::kicad;
 use crate::library::LibraryManager;
+use crate::reporting::{ConversionReporter, noop_reporter};
 
 pub fn convert_footprint(
     args: &Cli,
@@ -12,17 +14,34 @@ pub fn convert_footprint(
     lib_manager: &LibraryManager,
     lcsc_id: &str,
 ) -> Result<()> {
+    let options = FootprintExportOptions::from(args);
+    convert_footprint_with_options_and_reporter(
+        &options,
+        component_data,
+        lib_manager,
+        lcsc_id,
+        noop_reporter(),
+    )
+}
+
+pub(crate) fn convert_footprint_with_options_and_reporter(
+    options: &FootprintExportOptions,
+    component_data: &ComponentData,
+    lib_manager: &LibraryManager,
+    lcsc_id: &str,
+    reporter: &dyn ConversionReporter,
+) -> Result<()> {
     // Use LCSC ID as unique identifier to prevent name collisions
     let footprint_name = format!("{}_{}", sanitize_name(&component_data.title), lcsc_id);
     let footprint_path = lib_manager.get_footprint_path(&footprint_name);
 
     if !lib_manager.should_write_file(&footprint_path) {
-        println!("\u{2192} Footprint kept: {}", footprint_name);
+        reporter.emit_output_line(&format!("\u{2192} Footprint kept: {}", footprint_name));
         return Ok(());
     }
 
     let ee_footprint = FootprintImporter::parse(&component_data.package_detail)?;
-    let converter = Converter::new(args.kicad_version());
+    let converter = Converter::new(options.kicad_version);
 
     // Convert EasyEDA footprint to KiCad footprint
     let mut ki_footprint = kicad::KiFootprint {
@@ -418,23 +437,24 @@ pub fn convert_footprint(
 
     // Add 3D model reference if available
     if let Some(model_info) = &component_data.model_3d {
-        if args.model_3d || args.full {
+        if options.include_3d_model {
             // Use LCSC ID as unique identifier to prevent name collisions
             let model_name = format!("{}_{}", sanitize_name(&model_info.title), lcsc_id);
             let lib_name = lib_manager.lib_name();
-            let model_filename = preferred_3d_model_filename(lib_manager, &model_name);
-            let model_path = if args.project_relative {
-                format!("${{KIPRJMOD}}/{}.3dshapes/{}", lib_name, model_filename)
-            } else {
-                format!("../{}.3dshapes/{}", lib_name, model_filename)
-            };
+            if let Some(model_filename) = preferred_3d_model_filename(lib_manager, &model_name) {
+                let model_path = if options.project_relative_3d {
+                    format!("${{KIPRJMOD}}/{}.3dshapes/{}", lib_name, model_filename)
+                } else {
+                    format!("../{}.3dshapes/{}", lib_name, model_filename)
+                };
 
-            ki_footprint.model_3d = Some(kicad::Ki3dModel {
-                path: model_path,
-                offset: (0.0, 0.0, 0.0),
-                scale: (1.0, 1.0, 1.0),
-                rotate: (0.0, 0.0, 0.0),
-            });
+                ki_footprint.model_3d = Some(kicad::Ki3dModel {
+                    path: model_path,
+                    offset: (0.0, 0.0, 0.0),
+                    scale: (1.0, 1.0, 1.0),
+                    rotate: (0.0, 0.0, 0.0),
+                });
+            }
         }
     }
 
@@ -442,18 +462,20 @@ pub fn convert_footprint(
     let exporter = kicad::FootprintExporter::new();
     let footprint_data = exporter.export(&ki_footprint)?;
     lib_manager.write_footprint_with_status(&ki_footprint.name, &footprint_data)?;
-    println!("\u{2713} Footprint converted: {}", ki_footprint.name);
+    reporter.emit_output_line(&format!(
+        "\u{2713} Footprint converted: {}",
+        ki_footprint.name
+    ));
 
     Ok(())
 }
 
-fn preferred_3d_model_filename(lib_manager: &LibraryManager, model_name: &str) -> String {
+fn preferred_3d_model_filename(lib_manager: &LibraryManager, model_name: &str) -> Option<String> {
     if lib_manager.get_wrl_path(model_name).is_file() {
-        format!("{}.wrl", model_name)
+        Some(format!("{}.wrl", model_name))
     } else if lib_manager.get_step_path(model_name).is_file() {
-        format!("{}.step", model_name)
+        Some(format!("{}.step", model_name))
     } else {
-        // Prefer WRL when the files have not been written yet because KiCad renders it more reliably.
-        format!("{}.wrl", model_name)
+        None
     }
 }
