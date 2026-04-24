@@ -45,7 +45,8 @@ pub(crate) async fn convert_3d_model_with_reporter(
 
         let wrl_path = lib_manager.get_wrl_path(&model_name);
         let step_path = lib_manager.get_step_path(&model_name);
-        let should_write_wrl = lib_manager.should_write_file_with_overwrite(&wrl_path, options.overwrite);
+        let should_write_wrl =
+            lib_manager.should_write_file_with_overwrite(&wrl_path, options.overwrite);
         let should_write_step =
             lib_manager.should_write_file_with_overwrite(&step_path, options.overwrite);
 
@@ -81,9 +82,11 @@ pub(crate) async fn convert_3d_model_with_reporter(
         match obj_result {
             Some(Ok(obj_data)) => match exporter.obj_to_wrl(&obj_data) {
                 Ok(wrl_data) => {
-                    match lib_manager
-                        .write_wrl_model_with_status(&model_name, &wrl_data, options.overwrite)
-                    {
+                    match lib_manager.write_wrl_model_with_status(
+                        &model_name,
+                        &wrl_data,
+                        options.overwrite,
+                    ) {
                         Ok(write_outcome) => {
                             has_wrl = true;
                             wrote_wrl = write_outcome.was_written();
@@ -114,9 +117,11 @@ pub(crate) async fn convert_3d_model_with_reporter(
         // Process STEP result
         match step_result {
             Some(Ok(step_data)) => {
-                match lib_manager
-                    .write_step_model_with_status(&model_name, &step_data, options.overwrite)
-                {
+                match lib_manager.write_step_model_with_status(
+                    &model_name,
+                    &step_data,
+                    options.overwrite,
+                ) {
                     Ok(write_outcome) => {
                         has_step = true;
                         wrote_step = write_outcome.was_written();

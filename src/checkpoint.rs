@@ -100,7 +100,10 @@ impl CheckpointManager {
 
         let mut completed = self.completed.lock().expect("checkpoint mutex poisoned");
         for lcsc_id in lcsc_ids {
-            completed.entry(lcsc_id.clone()).or_default().union_assign(assets);
+            completed
+                .entry(lcsc_id.clone())
+                .or_default()
+                .union_assign(assets);
         }
 
         write_checkpoint_file(&self.path, &completed)
@@ -111,7 +114,11 @@ fn load_checkpoint_file(path: &Path) -> Result<HashMap<String, CompletedAssets>>
     match std::fs::read_to_string(path) {
         Ok(content) => {
             let mut completed: HashMap<String, CompletedAssets> = HashMap::new();
-            for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            for line in content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
                 let (lcsc_id, assets) = parse_checkpoint_line(line);
                 completed.entry(lcsc_id).or_default().union_assign(assets);
             }
@@ -132,10 +139,7 @@ fn parse_checkpoint_line(line: &str) -> (String, CompletedAssets) {
     (line.to_string(), CompletedAssets::all())
 }
 
-fn write_checkpoint_file(
-    path: &Path,
-    completed: &HashMap<String, CompletedAssets>,
-) -> Result<()> {
+fn write_checkpoint_file(path: &Path, completed: &HashMap<String, CompletedAssets>) -> Result<()> {
     let mut entries: Vec<_> = completed.iter().collect();
     entries.sort_by(|left, right| left.0.cmp(right.0));
 
@@ -150,7 +154,8 @@ fn write_checkpoint_file(
         output.push('\n');
     }
 
-    std::fs::write(path, output).map_err(|error| AppError::io_context("write checkpoint", path, error))
+    std::fs::write(path, output)
+        .map_err(|error| AppError::io_context("write checkpoint", path, error))
 }
 
 #[cfg(test)]
@@ -229,7 +234,10 @@ mod tests {
             .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
-        assert_eq!(content.lines().collect::<Vec<_>>(), vec!["C1\ts", "C2\tsfm", "C3\tfm"]);
+        assert_eq!(
+            content.lines().collect::<Vec<_>>(),
+            vec!["C1\ts", "C2\tsfm", "C3\tfm"]
+        );
 
         let _ = fs::remove_file(path);
     }

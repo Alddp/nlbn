@@ -1,5 +1,5 @@
-use crate::cli::Cli;
 use crate::checkpoint::CompletedAssets;
+use crate::cli::Cli;
 use crate::error::{AppError, EasyedaError, Result};
 use crate::kicad::symbol_exporter::SymbolFillColor;
 use std::path::PathBuf;

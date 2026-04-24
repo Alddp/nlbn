@@ -30,6 +30,51 @@ pub struct RunSummary {
     pub is_batch: bool,
 }
 
+#[derive(Clone)]
+struct RunProgress {
+    success_count: Arc<AtomicUsize>,
+    failed_count: Arc<AtomicUsize>,
+    successful_ids: Arc<Mutex<Vec<String>>>,
+    failed_ids: Arc<Mutex<Vec<String>>>,
+}
+
+impl RunProgress {
+    fn new() -> Self {
+        Self {
+            success_count: Arc::new(AtomicUsize::new(0)),
+            failed_count: Arc::new(AtomicUsize::new(0)),
+            successful_ids: Arc::new(Mutex::new(Vec::new())),
+            failed_ids: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    async fn record_success(&self, lcsc_id: &str) {
+        self.success_count.fetch_add(1, Ordering::Relaxed);
+        self.successful_ids.lock().await.push(lcsc_id.to_string());
+    }
+
+    async fn record_failure(&self, lcsc_id: &str) {
+        self.failed_count.fetch_add(1, Ordering::Relaxed);
+        self.failed_ids.lock().await.push(lcsc_id.to_string());
+    }
+
+    async fn failed_ids(&self) -> Vec<String> {
+        self.failed_ids.lock().await.clone()
+    }
+
+    async fn successful_ids(&self) -> Vec<String> {
+        self.successful_ids.lock().await.clone()
+    }
+
+    fn success_count(&self) -> usize {
+        self.success_count.load(Ordering::Relaxed)
+    }
+
+    fn failed_count(&self) -> usize {
+        self.failed_count.load(Ordering::Relaxed)
+    }
+}
+
 struct PreparedRun {
     request: Arc<RunRequest>,
     api: Arc<EasyedaApi>,
@@ -98,43 +143,24 @@ pub async fn run_with_reporter(
 
 async fn execute(prepared: PreparedRun, reporter: Arc<dyn RunReporter>) -> Result<RunSummary> {
     let total_count = prepared.total_count();
-    let success_count = Arc::new(AtomicUsize::new(0));
-    let failed_count = Arc::new(AtomicUsize::new(0));
-    let successful_ids = Arc::new(Mutex::new(Vec::new()));
-    let failed_ids = Arc::new(Mutex::new(Vec::new()));
+    let progress = RunProgress::new();
 
     let run_result = if prepared.is_batch && prepared.request.run.parallel > 1 {
-        run_parallel(
-            &prepared,
-            Arc::clone(&reporter),
-            Arc::clone(&success_count),
-            Arc::clone(&failed_count),
-            Arc::clone(&successful_ids),
-            Arc::clone(&failed_ids),
-        )
-        .await
+        run_parallel(&prepared, Arc::clone(&reporter), progress.clone()).await
     } else {
-        run_sequential(
-            &prepared,
-            Arc::clone(&reporter),
-            Arc::clone(&success_count),
-            Arc::clone(&failed_count),
-            Arc::clone(&successful_ids),
-            Arc::clone(&failed_ids),
-        )
-        .await
+        run_sequential(&prepared, Arc::clone(&reporter), progress.clone()).await
     };
 
-    let finalize_result = finalize_run(&prepared, &successful_ids).await;
+    let finalize_result = finalize_run(&prepared, &progress).await;
     reporter.finish();
     finalize_result?;
     run_result?;
 
-    let failed_ids = failed_ids.lock().await.clone();
+    let failed_ids = progress.failed_ids().await;
     Ok(RunSummary {
         total: total_count,
-        success: success_count.load(Ordering::Relaxed),
-        failed: failed_count.load(Ordering::Relaxed),
+        success: progress.success_count(),
+        failed: progress.failed_count(),
         failed_ids,
         output_dir: prepared.request.run.output.clone(),
         is_batch: prepared.is_batch,
@@ -144,10 +170,7 @@ async fn execute(prepared: PreparedRun, reporter: Arc<dyn RunReporter>) -> Resul
 async fn run_parallel(
     prepared: &PreparedRun,
     reporter: Arc<dyn RunReporter>,
-    success_count: Arc<AtomicUsize>,
-    failed_count: Arc<AtomicUsize>,
-    successful_ids: Arc<Mutex<Vec<String>>>,
-    failed_ids: Arc<Mutex<Vec<String>>>,
+    progress: RunProgress,
 ) -> Result<()> {
     let semaphore = Arc::new(Semaphore::new(prepared.request.run.parallel));
     let mut join_set = JoinSet::new();
@@ -159,10 +182,7 @@ async fn run_parallel(
         let request = Arc::clone(&prepared.request);
         let api = Arc::clone(&prepared.api);
         let lib_manager = Arc::clone(&prepared.lib_manager);
-        let success_count = Arc::clone(&success_count);
-        let failed_count = Arc::clone(&failed_count);
-        let successful_ids = Arc::clone(&successful_ids);
-        let failed_ids = Arc::clone(&failed_ids);
+        let progress = progress.clone();
 
         join_set.spawn(async move {
             let _permit = semaphore.acquire().await.expect("semaphore closed");
@@ -178,14 +198,12 @@ async fn run_parallel(
             .await
             {
                 Ok(_) => {
-                    success_count.fetch_add(1, Ordering::Relaxed);
-                    successful_ids.lock().await.push(lcsc_id.clone());
+                    progress.record_success(&lcsc_id).await;
                     reporter.on_component_succeeded(&lcsc_id);
                     Ok::<(), AppError>(())
                 }
                 Err(error) => {
-                    failed_count.fetch_add(1, Ordering::Relaxed);
-                    failed_ids.lock().await.push(lcsc_id.clone());
+                    progress.record_failure(&lcsc_id).await;
                     reporter.on_component_failed(&lcsc_id, &error, continue_on_error);
                     Err(error)
                 }
@@ -205,8 +223,7 @@ async fn run_parallel(
             }
             Err(error) if error.is_cancelled() => {}
             Err(error) => {
-                failed_count.fetch_add(1, Ordering::Relaxed);
-                failed_ids.lock().await.push("<task panic>".to_string());
+                progress.record_failure("<task panic>").await;
                 reporter.on_task_panicked(&error.to_string());
                 if !continue_on_error && first_error.is_none() {
                     first_error = Some(AppError::Other(format!("Task panicked: {}", error)));
@@ -226,10 +243,7 @@ async fn run_parallel(
 async fn run_sequential(
     prepared: &PreparedRun,
     reporter: Arc<dyn RunReporter>,
-    success_count: Arc<AtomicUsize>,
-    failed_count: Arc<AtomicUsize>,
-    successful_ids: Arc<Mutex<Vec<String>>>,
-    failed_ids: Arc<Mutex<Vec<String>>>,
+    progress: RunProgress,
 ) -> Result<()> {
     for lcsc_id in &prepared.request.lcsc_ids {
         reporter.on_component_started(lcsc_id);
@@ -244,13 +258,11 @@ async fn run_sequential(
         .await
         {
             Ok(_) => {
-                success_count.fetch_add(1, Ordering::Relaxed);
-                successful_ids.lock().await.push(lcsc_id.clone());
+                progress.record_success(lcsc_id).await;
                 reporter.on_component_succeeded(lcsc_id);
             }
             Err(error) => {
-                failed_count.fetch_add(1, Ordering::Relaxed);
-                failed_ids.lock().await.push(lcsc_id.clone());
+                progress.record_failure(lcsc_id).await;
 
                 if prepared.request.run.continue_on_error {
                     reporter.on_component_failed(lcsc_id, &error, true);
@@ -265,15 +277,13 @@ async fn run_sequential(
     Ok(())
 }
 
-async fn finalize_run(
-    prepared: &PreparedRun,
-    successful_ids: &Arc<Mutex<Vec<String>>>,
-) -> Result<()> {
+async fn finalize_run(prepared: &PreparedRun, progress: &RunProgress) -> Result<()> {
     prepared.lib_manager.flush_symbol_libraries()?;
-    let successful_ids = successful_ids.lock().await.clone();
-    prepared
-        .checkpoint
-        .record_completed_ids(&successful_ids, prepared.request.component.checkpoint_assets())?;
+    let successful_ids = progress.successful_ids().await;
+    prepared.checkpoint.record_completed_ids(
+        &successful_ids,
+        prepared.request.component.checkpoint_assets(),
+    )?;
     Ok(())
 }
 
