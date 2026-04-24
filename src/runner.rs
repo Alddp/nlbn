@@ -1,9 +1,9 @@
-use crate::checkpoint::CheckpointManager;
+use crate::checkpoint::{CheckpointManager, CompletedAssets};
 use crate::{
     AppError, Cli, ComponentConversionRequest, ConversionReporter, EasyedaApi, LibraryManager,
     Result, RunRequest, footprint_converter, model_converter, symbol_converter,
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,20 +44,22 @@ impl PreparedRun {
         let lcsc_ids = std::mem::take(&mut request.lcsc_ids);
         let is_batch = lcsc_ids.len() > 1;
 
-        let lib_manager = Arc::new(LibraryManager::with_overwrite(
-            &request.run.output,
-            request.run.overwrite,
-        ));
+        let lib_manager = Arc::new(LibraryManager::new(&request.run.output));
         lib_manager.create_directories()?;
 
         let checkpoint = Arc::new(CheckpointManager::load(
             request.run.output.join(".checkpoint"),
         )?);
-        let completed_ids = checkpoint.completed_ids();
+        let completed_assets = checkpoint.completed_assets();
         let before = lcsc_ids.len();
-        request.lcsc_ids =
-            filter_pending_lcsc_ids(lcsc_ids, &completed_ids, is_batch, request.run.overwrite);
-        if is_batch && !request.run.overwrite && before != request.lcsc_ids.len() {
+        request.lcsc_ids = filter_pending_lcsc_ids(
+            lcsc_ids,
+            &completed_assets,
+            is_batch,
+            request.component.checkpoint_assets(),
+            request.component.overwrite_any(),
+        );
+        if is_batch && !request.component.overwrite_any() && before != request.lcsc_ids.len() {
             reporter.on_resume_skipped(before - request.lcsc_ids.len());
         }
 
@@ -269,23 +271,30 @@ async fn finalize_run(
 ) -> Result<()> {
     prepared.lib_manager.flush_symbol_libraries()?;
     let successful_ids = successful_ids.lock().await.clone();
-    prepared.checkpoint.append_completed_ids(&successful_ids)?;
+    prepared
+        .checkpoint
+        .record_completed_ids(&successful_ids, prepared.request.component.checkpoint_assets())?;
     Ok(())
 }
 
 fn filter_pending_lcsc_ids(
     lcsc_ids: Vec<String>,
-    completed_ids: &HashSet<String>,
+    completed_assets: &HashMap<String, CompletedAssets>,
     is_batch: bool,
-    overwrite: bool,
+    required_assets: CompletedAssets,
+    overwrite_any: bool,
 ) -> Vec<String> {
-    if !is_batch || overwrite || completed_ids.is_empty() {
+    if !is_batch || overwrite_any || completed_assets.is_empty() {
         return lcsc_ids;
     }
 
     lcsc_ids
         .into_iter()
-        .filter(|id| !completed_ids.contains(id))
+        .filter(|id| {
+            !completed_assets
+                .get(id)
+                .is_some_and(|assets| assets.covers(required_assets))
+        })
         .collect()
 }
 
@@ -317,6 +326,7 @@ async fn process_component(
             &component_data,
             lib_manager,
             lcsc_id,
+            request.model_3d,
             reporter,
         )
         .await?;
@@ -339,14 +349,16 @@ async fn process_component(
 #[cfg(test)]
 mod tests {
     use super::filter_pending_lcsc_ids;
-    use std::collections::HashSet;
+    use crate::checkpoint::CompletedAssets;
+    use std::collections::HashMap;
 
     #[test]
     fn batch_resume_skips_completed_ids_without_overwrite() {
         let ids = vec!["C1".to_string(), "C2".to_string(), "C3".to_string()];
-        let completed = HashSet::from(["C2".to_string()]);
+        let completed = HashMap::from([("C2".to_string(), CompletedAssets::all())]);
 
-        let filtered = filter_pending_lcsc_ids(ids, &completed, true, false);
+        let filtered =
+            filter_pending_lcsc_ids(ids, &completed, true, CompletedAssets::all(), false);
 
         assert_eq!(filtered, vec!["C1".to_string(), "C3".to_string()]);
     }
@@ -354,9 +366,37 @@ mod tests {
     #[test]
     fn batch_resume_keeps_completed_ids_when_overwrite_is_enabled() {
         let ids = vec!["C1".to_string(), "C2".to_string(), "C3".to_string()];
-        let completed = HashSet::from(["C2".to_string()]);
+        let completed = HashMap::from([("C2".to_string(), CompletedAssets::all())]);
 
-        let filtered = filter_pending_lcsc_ids(ids.clone(), &completed, true, true);
+        let filtered =
+            filter_pending_lcsc_ids(ids.clone(), &completed, true, CompletedAssets::all(), true);
+
+        assert_eq!(filtered, ids);
+    }
+
+    #[test]
+    fn batch_resume_keeps_ids_when_checkpoint_does_not_cover_requested_assets() {
+        let ids = vec!["C1".to_string(), "C2".to_string()];
+        let completed = HashMap::from([(
+            "C2".to_string(),
+            CompletedAssets {
+                symbol: true,
+                footprint: false,
+                model_3d: false,
+            },
+        )]);
+
+        let filtered = filter_pending_lcsc_ids(
+            ids.clone(),
+            &completed,
+            true,
+            CompletedAssets {
+                symbol: false,
+                footprint: true,
+                model_3d: false,
+            },
+            false,
+        );
 
         assert_eq!(filtered, ids);
     }

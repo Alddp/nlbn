@@ -38,6 +38,18 @@ pub struct Cli {
     #[arg(long)]
     pub overwrite: bool,
 
+    /// Overwrite symbol output only
+    #[arg(long)]
+    pub overwrite_symbol: bool,
+
+    /// Overwrite footprint output only
+    #[arg(long)]
+    pub overwrite_footprint: bool,
+
+    /// Overwrite 3D model output only
+    #[arg(long = "overwrite-3d")]
+    pub overwrite_model_3d: bool,
+
     /// Use project-relative paths (KIPRJMOD) instead of footprint-relative paths for 3D models
     #[arg(long)]
     pub project_relative: bool,

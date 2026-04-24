@@ -74,7 +74,11 @@ impl LibraryManager {
     }
 
     pub fn should_write_file(&self, path: &Path) -> bool {
-        self.overwrite || !path.exists()
+        self.should_write_file_with_overwrite(path, self.overwrite)
+    }
+
+    pub fn should_write_file_with_overwrite(&self, path: &Path, overwrite: bool) -> bool {
+        overwrite || !path.exists()
     }
 
     /// Create necessary output directories
@@ -234,8 +238,9 @@ impl LibraryManager {
         data: &[u8],
         buf_size: usize,
         kind: &str,
+        overwrite: bool,
     ) -> Result<WriteOutcome> {
-        if !self.should_write_file(path) {
+        if !self.should_write_file_with_overwrite(path, overwrite) {
             log::info!("Skipping existing {}: {}", kind, path.display());
             return Ok(WriteOutcome::Skipped(path.to_path_buf()));
         }
@@ -249,7 +254,7 @@ impl LibraryManager {
     /// Write a footprint file
     pub fn write_footprint(&self, footprint_name: &str, data: &str) -> Result<PathBuf> {
         Ok(self
-            .write_footprint_with_status(footprint_name, data)?
+            .write_footprint_with_status(footprint_name, data, false)?
             .into_path())
     }
 
@@ -258,10 +263,17 @@ impl LibraryManager {
         &self,
         footprint_name: &str,
         data: &str,
+        overwrite: bool,
     ) -> Result<WriteOutcome> {
         let footprint_path = self.get_footprint_path(footprint_name);
 
-        self.write_output_file(&footprint_path, data.as_bytes(), 32 * 1024, "footprint")
+        self.write_output_file(
+            &footprint_path,
+            data.as_bytes(),
+            32 * 1024,
+            "footprint",
+            overwrite,
+        )
     }
 
     /// Write 3D model files
@@ -272,12 +284,12 @@ impl LibraryManager {
         step_data: &[u8],
     ) -> Result<(PathBuf, PathBuf)> {
         let wrl_path = self
-            .write_wrl_model_with_status(model_name, wrl_data)?
+            .write_wrl_model_with_status(model_name, wrl_data, false)?
             .into_path();
 
         let step_path = self.get_step_path(model_name);
         if !step_data.is_empty() {
-            self.write_step_model_with_status(model_name, step_data)?;
+            self.write_step_model_with_status(model_name, step_data, false)?;
         }
 
         Ok((wrl_path, step_path))
@@ -286,7 +298,7 @@ impl LibraryManager {
     /// Write only VRML model (when STEP is not available)
     pub fn write_wrl_model(&self, model_name: &str, wrl_data: &str) -> Result<PathBuf> {
         Ok(self
-            .write_wrl_model_with_status(model_name, wrl_data)?
+            .write_wrl_model_with_status(model_name, wrl_data, false)?
             .into_path())
     }
 
@@ -295,16 +307,23 @@ impl LibraryManager {
         &self,
         model_name: &str,
         wrl_data: &str,
+        overwrite: bool,
     ) -> Result<WriteOutcome> {
         let wrl_path = self.get_wrl_path(model_name);
 
-        self.write_output_file(&wrl_path, wrl_data.as_bytes(), 256 * 1024, "VRML model")
+        self.write_output_file(
+            &wrl_path,
+            wrl_data.as_bytes(),
+            256 * 1024,
+            "VRML model",
+            overwrite,
+        )
     }
 
     /// Write only STEP model
     pub fn write_step_model(&self, model_name: &str, step_data: &[u8]) -> Result<PathBuf> {
         Ok(self
-            .write_step_model_with_status(model_name, step_data)?
+            .write_step_model_with_status(model_name, step_data, false)?
             .into_path())
     }
 
@@ -313,10 +332,11 @@ impl LibraryManager {
         &self,
         model_name: &str,
         step_data: &[u8],
+        overwrite: bool,
     ) -> Result<WriteOutcome> {
         let step_path = self.get_step_path(model_name);
 
-        self.write_output_file(&step_path, step_data, 256 * 1024, "STEP model")
+        self.write_output_file(&step_path, step_data, 256 * 1024, "STEP model", overwrite)
     }
 
     /// Get the path for a WRL model file
@@ -562,7 +582,7 @@ mod tests {
     fn staged_symbol_overwrite_updates_buffered_content() {
         let root = test_root("stage_overwrite");
         let output_dir = root.join("demo-lib");
-        let manager = LibraryManager::with_overwrite(&output_dir, true);
+        let manager = LibraryManager::new(&output_dir);
         manager.create_directories().unwrap();
 
         let lib_path = manager.get_symbol_lib_path();

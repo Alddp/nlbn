@@ -35,7 +35,7 @@ pub(crate) fn convert_footprint_with_options_and_reporter(
     let footprint_name = format!("{}_{}", sanitize_name(&component_data.title), lcsc_id);
     let footprint_path = lib_manager.get_footprint_path(&footprint_name);
 
-    if !lib_manager.should_write_file(&footprint_path) {
+    if !lib_manager.should_write_file_with_overwrite(&footprint_path, options.overwrite) {
         reporter.emit_output_line(&format!("\u{2192} Footprint kept: {}", footprint_name));
         return Ok(());
     }
@@ -461,7 +461,11 @@ pub(crate) fn convert_footprint_with_options_and_reporter(
     // Export footprint
     let exporter = kicad::FootprintExporter::new();
     let footprint_data = exporter.export(&ki_footprint)?;
-    lib_manager.write_footprint_with_status(&ki_footprint.name, &footprint_data)?;
+    lib_manager.write_footprint_with_status(
+        &ki_footprint.name,
+        &footprint_data,
+        options.overwrite,
+    )?;
     reporter.emit_output_line(&format!(
         "\u{2713} Footprint converted: {}",
         ki_footprint.name

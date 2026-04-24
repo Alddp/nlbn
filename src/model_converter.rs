@@ -1,6 +1,7 @@
 use crate::converter::sanitize_name;
 use crate::easyeda::{ComponentData, EasyedaApi};
 use crate::error::{KicadError, Result};
+use crate::export_options::Model3dExportOptions;
 use crate::kicad::ModelExporter;
 use crate::library::LibraryManager;
 use crate::reporting::{ConversionReporter, noop_reporter};
@@ -11,7 +12,15 @@ pub async fn convert_3d_model(
     lib_manager: &LibraryManager,
     lcsc_id: &str,
 ) -> Result<()> {
-    convert_3d_model_with_reporter(api, component_data, lib_manager, lcsc_id, noop_reporter()).await
+    convert_3d_model_with_reporter(
+        api,
+        component_data,
+        lib_manager,
+        lcsc_id,
+        Model3dExportOptions { overwrite: false },
+        noop_reporter(),
+    )
+    .await
 }
 
 pub(crate) async fn convert_3d_model_with_reporter(
@@ -19,6 +28,7 @@ pub(crate) async fn convert_3d_model_with_reporter(
     component_data: &ComponentData,
     lib_manager: &LibraryManager,
     lcsc_id: &str,
+    options: Model3dExportOptions,
     reporter: &dyn ConversionReporter,
 ) -> Result<()> {
     if let Some(model_info) = &component_data.model_3d {
@@ -35,8 +45,9 @@ pub(crate) async fn convert_3d_model_with_reporter(
 
         let wrl_path = lib_manager.get_wrl_path(&model_name);
         let step_path = lib_manager.get_step_path(&model_name);
-        let should_write_wrl = lib_manager.should_write_file(&wrl_path);
-        let should_write_step = lib_manager.should_write_file(&step_path);
+        let should_write_wrl = lib_manager.should_write_file_with_overwrite(&wrl_path, options.overwrite);
+        let should_write_step =
+            lib_manager.should_write_file_with_overwrite(&step_path, options.overwrite);
 
         if !should_write_wrl && !should_write_step {
             reporter.emit_output_line(&format!(
@@ -70,7 +81,9 @@ pub(crate) async fn convert_3d_model_with_reporter(
         match obj_result {
             Some(Ok(obj_data)) => match exporter.obj_to_wrl(&obj_data) {
                 Ok(wrl_data) => {
-                    match lib_manager.write_wrl_model_with_status(&model_name, &wrl_data) {
+                    match lib_manager
+                        .write_wrl_model_with_status(&model_name, &wrl_data, options.overwrite)
+                    {
                         Ok(write_outcome) => {
                             has_wrl = true;
                             wrote_wrl = write_outcome.was_written();
@@ -101,7 +114,9 @@ pub(crate) async fn convert_3d_model_with_reporter(
         // Process STEP result
         match step_result {
             Some(Ok(step_data)) => {
-                match lib_manager.write_step_model_with_status(&model_name, &step_data) {
+                match lib_manager
+                    .write_step_model_with_status(&model_name, &step_data, options.overwrite)
+                {
                     Ok(write_outcome) => {
                         has_step = true;
                         wrote_step = write_outcome.was_written();

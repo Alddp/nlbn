@@ -47,6 +47,9 @@ fn test_cli(overwrite: bool) -> Cli {
         full: false,
         output: PathBuf::new(),
         overwrite,
+        overwrite_symbol: false,
+        overwrite_footprint: false,
+        overwrite_model_3d: false,
         project_relative: false,
         symbol_fill_color: None,
         debug: false,
@@ -195,10 +198,10 @@ fn existing_3d_outputs_are_preserved_without_overwrite() {
     fs::write(&step_path, b"existing step").expect("should seed existing step");
 
     let wrl_outcome = lib_manager
-        .write_wrl_model_with_status(&model_name, "replacement wrl")
+        .write_wrl_model_with_status(&model_name, "replacement wrl", false)
         .expect("should handle existing wrl");
     let step_outcome = lib_manager
-        .write_step_model_with_status(&model_name, b"replacement step")
+        .write_step_model_with_status(&model_name, b"replacement step", false)
         .expect("should handle existing step");
 
     assert!(!wrl_outcome.was_written());
@@ -231,10 +234,10 @@ fn existing_3d_outputs_are_replaced_with_overwrite() {
     fs::write(&step_path, b"existing step").expect("should seed existing step");
 
     let wrl_outcome = lib_manager
-        .write_wrl_model_with_status(&model_name, "replacement wrl")
+        .write_wrl_model_with_status(&model_name, "replacement wrl", true)
         .expect("should replace wrl");
     let step_outcome = lib_manager
-        .write_step_model_with_status(&model_name, b"replacement step")
+        .write_step_model_with_status(&model_name, b"replacement step", true)
         .expect("should replace step");
 
     assert!(wrl_outcome.was_written());

@@ -1,4 +1,5 @@
 use crate::cli::Cli;
+use crate::checkpoint::CompletedAssets;
 use crate::error::{AppError, EasyedaError, Result};
 use crate::kicad::symbol_exporter::SymbolFillColor;
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ impl SymbolExportOptions {
     pub fn from_cli(cli: &Cli) -> Result<Self> {
         Ok(Self {
             symbol_fill_color: parse_symbol_fill_color(cli.symbol_fill_color.as_deref())?,
-            overwrite: cli.overwrite,
+            overwrite: cli.overwrite || cli.overwrite_symbol,
         })
     }
 }
@@ -22,13 +23,29 @@ impl SymbolExportOptions {
 pub struct FootprintExportOptions {
     pub include_3d_model: bool,
     pub project_relative_3d: bool,
+    pub overwrite: bool,
 }
 
 impl From<&Cli> for FootprintExportOptions {
     fn from(cli: &Cli) -> Self {
+        let convert_model_3d = cli.model_3d || cli.full;
         Self {
-            include_3d_model: cli.model_3d || cli.full,
+            include_3d_model: convert_model_3d,
             project_relative_3d: cli.project_relative,
+            overwrite: cli.overwrite || cli.overwrite_footprint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Model3dExportOptions {
+    pub overwrite: bool,
+}
+
+impl From<&Cli> for Model3dExportOptions {
+    fn from(cli: &Cli) -> Self {
+        Self {
+            overwrite: cli.overwrite || cli.overwrite_model_3d,
         }
     }
 }
@@ -40,24 +57,42 @@ pub struct ComponentConversionRequest {
     pub convert_model_3d: bool,
     pub symbol: SymbolExportOptions,
     pub footprint: FootprintExportOptions,
+    pub model_3d: Model3dExportOptions,
 }
 
 impl ComponentConversionRequest {
     pub fn from_cli(cli: &Cli) -> Result<Self> {
+        let convert_symbol = cli.symbol || cli.full;
+        let convert_footprint = cli.footprint || cli.full;
+        let convert_model_3d = cli.model_3d || cli.full;
         Ok(Self {
-            convert_symbol: cli.symbol || cli.full,
-            convert_footprint: cli.footprint || cli.full,
-            convert_model_3d: cli.model_3d || cli.full,
+            convert_symbol,
+            convert_footprint,
+            convert_model_3d,
             symbol: SymbolExportOptions::from_cli(cli)?,
             footprint: FootprintExportOptions::from(cli),
+            model_3d: Model3dExportOptions::from(cli),
         })
+    }
+
+    pub fn overwrite_any(&self) -> bool {
+        (self.convert_symbol && self.symbol.overwrite)
+            || (self.convert_footprint && self.footprint.overwrite)
+            || (self.convert_model_3d && self.model_3d.overwrite)
+    }
+
+    pub fn checkpoint_assets(&self) -> CompletedAssets {
+        CompletedAssets {
+            symbol: self.convert_symbol,
+            footprint: self.convert_footprint,
+            model_3d: self.convert_model_3d,
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     pub output: PathBuf,
-    pub overwrite: bool,
     pub continue_on_error: bool,
     pub parallel: usize,
 }
@@ -81,7 +116,6 @@ impl TryFrom<Cli> for RunRequest {
             lcsc_ids,
             run: RunOptions {
                 output: cli.output,
-                overwrite: cli.overwrite,
                 continue_on_error: cli.continue_on_error,
                 parallel: cli.parallel,
             },
@@ -162,6 +196,9 @@ mod tests {
             full: true,
             output: PathBuf::from("out"),
             overwrite: true,
+            overwrite_symbol: false,
+            overwrite_footprint: false,
+            overwrite_model_3d: false,
             project_relative: true,
             symbol_fill_color: Some("#005C8FCC".to_string()),
             debug: false,
@@ -180,9 +217,10 @@ mod tests {
         assert!(request.component.convert_model_3d);
         assert!(request.component.footprint.include_3d_model);
         assert!(request.component.footprint.project_relative_3d);
+        assert!(request.component.footprint.overwrite);
+        assert!(request.component.model_3d.overwrite);
         assert!(request.component.symbol.symbol_fill_color.is_some());
         assert_eq!(request.run.output, PathBuf::from("out"));
-        assert!(request.run.overwrite);
         assert!(request.run.continue_on_error);
         assert_eq!(request.run.parallel, 8);
     }
