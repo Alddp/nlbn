@@ -12,11 +12,17 @@ pub fn convert_footprint(
     lib_manager: &LibraryManager,
     lcsc_id: &str,
 ) -> Result<()> {
-    let ee_footprint = FootprintImporter::parse(&component_data.package_detail)?;
-    let converter = Converter::new(args.kicad_version());
-
     // Use LCSC ID as unique identifier to prevent name collisions
     let footprint_name = format!("{}_{}", sanitize_name(&component_data.title), lcsc_id);
+    let footprint_path = lib_manager.get_footprint_path(&footprint_name);
+
+    if !lib_manager.should_write_file(&footprint_path) {
+        println!("\u{2192} Footprint kept: {}", footprint_name);
+        return Ok(());
+    }
+
+    let ee_footprint = FootprintImporter::parse(&component_data.package_detail)?;
+    let converter = Converter::new(args.kicad_version());
 
     // Convert EasyEDA footprint to KiCad footprint
     let mut ki_footprint = kicad::KiFootprint {
@@ -435,8 +441,7 @@ pub fn convert_footprint(
     // Export footprint
     let exporter = kicad::FootprintExporter::new();
     let footprint_data = exporter.export(&ki_footprint)?;
-    lib_manager.write_footprint(&ki_footprint.name, &footprint_data)?;
-
+    lib_manager.write_footprint_with_status(&ki_footprint.name, &footprint_data)?;
     println!("\u{2713} Footprint converted: {}", ki_footprint.name);
 
     Ok(())

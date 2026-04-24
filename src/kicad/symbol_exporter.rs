@@ -1,18 +1,86 @@
 use crate::cli::KicadVersion;
 use crate::converter::Converter;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::kicad::symbol::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SymbolFillColor {
+    red: u8,
+    green: u8,
+    blue: u8,
+    alpha: u8,
+}
+
+impl SymbolFillColor {
+    pub fn parse(value: &str) -> Result<Self> {
+        let trimmed = value.trim();
+        let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
+
+        if !(hex.len() == 6 || hex.len() == 8) || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(AppError::Other(format!(
+                "Invalid symbol fill color '{}'. Expected #RRGGBB or #RRGGBBAA",
+                value
+            )));
+        }
+
+        let red = u8::from_str_radix(&hex[0..2], 16)
+            .map_err(|_| AppError::Other(format!("Invalid symbol fill color '{}'", value)))?;
+        let green = u8::from_str_radix(&hex[2..4], 16)
+            .map_err(|_| AppError::Other(format!("Invalid symbol fill color '{}'", value)))?;
+        let blue = u8::from_str_radix(&hex[4..6], 16)
+            .map_err(|_| AppError::Other(format!("Invalid symbol fill color '{}'", value)))?;
+        let alpha = if hex.len() == 8 {
+            u8::from_str_radix(&hex[6..8], 16)
+                .map_err(|_| AppError::Other(format!("Invalid symbol fill color '{}'", value)))?
+        } else {
+            u8::MAX
+        };
+
+        Ok(Self {
+            red,
+            green,
+            blue,
+            alpha,
+        })
+    }
+
+    fn to_kicad_fill(self) -> String {
+        format!(
+            "(fill (type color) (color {} {} {} {}))",
+            self.red,
+            self.green,
+            self.blue,
+            self.alpha_to_kicad()
+        )
+    }
+
+    fn alpha_to_kicad(self) -> String {
+        match self.alpha {
+            0 => "0".to_string(),
+            u8::MAX => "1".to_string(),
+            alpha => {
+                let formatted = format!("{:.3}", f64::from(alpha) / f64::from(u8::MAX));
+                formatted
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string()
+            }
+        }
+    }
+}
 
 pub struct SymbolExporter {
     version: KicadVersion,
     converter: Converter,
+    rectangle_fill_color: Option<SymbolFillColor>,
 }
 
 impl SymbolExporter {
-    pub fn new(version: KicadVersion) -> Self {
+    pub fn new(version: KicadVersion, rectangle_fill_color: Option<SymbolFillColor>) -> Self {
         Self {
             version,
             converter: Converter::new(version),
+            rectangle_fill_color,
         }
     }
 
@@ -260,7 +328,7 @@ impl SymbolExporter {
 
     fn format_pin_v5(&self, pin: &KiPin) -> String {
         let x = self.converter.px_to_mil(pin.pos_x);
-        let y = self.converter.px_to_mil(pin.pos_y);  // Don't flip, already handled
+        let y = self.converter.px_to_mil(pin.pos_y); // Don't flip, already handled
         let length = self.converter.px_to_mil(pin.length);
 
         // X name number posx posy length orientation Snum Snom unit convert Etype [shape]
@@ -288,9 +356,11 @@ impl SymbolExporter {
         let _width = self.converter.px_to_mm(rect.stroke_width);
 
         let fill = if rect.fill {
-            "(fill (type color) (color 255 192 203 1))"
+            self.rectangle_fill_color
+                .map(SymbolFillColor::to_kicad_fill)
+                .unwrap_or_else(|| "(fill (type background))".to_string())
         } else {
-            "(fill (type none))"
+            "(fill (type none))".to_string()
         };
 
         format!(
@@ -301,9 +371,9 @@ impl SymbolExporter {
 
     fn format_rectangle_v5(&self, rect: &KiRectangle) -> String {
         let x1 = self.converter.px_to_mil(rect.x1);
-        let y1 = self.converter.px_to_mil(rect.y1);  // Don't flip, already handled
+        let y1 = self.converter.px_to_mil(rect.y1); // Don't flip, already handled
         let x2 = self.converter.px_to_mil(rect.x2);
-        let y2 = self.converter.px_to_mil(rect.y2);  // Don't flip, already handled
+        let y2 = self.converter.px_to_mil(rect.y2); // Don't flip, already handled
 
         let fill = if rect.fill { "F" } else { "N" };
 
@@ -327,7 +397,7 @@ impl SymbolExporter {
 
     fn format_circle_v5(&self, circle: &KiCircle) -> String {
         let cx = self.converter.px_to_mil(circle.cx);
-        let cy = self.converter.px_to_mil(circle.cy);  // Don't flip, already handled
+        let cy = self.converter.px_to_mil(circle.cy); // Don't flip, already handled
         let radius = self.converter.px_to_mil(circle.radius);
 
         let fill = if circle.fill { "F" } else { "N" };
@@ -338,11 +408,11 @@ impl SymbolExporter {
 
     fn format_arc_v6(&self, arc: &KiArc) -> String {
         let start_x = self.converter.px_to_mm(arc.start_x);
-        let start_y = self.converter.px_to_mm(arc.start_y);  // Don't flip, already handled
+        let start_y = self.converter.px_to_mm(arc.start_y); // Don't flip, already handled
         let mid_x = self.converter.px_to_mm(arc.mid_x);
-        let mid_y = self.converter.px_to_mm(arc.mid_y);  // Don't flip, already handled
+        let mid_y = self.converter.px_to_mm(arc.mid_y); // Don't flip, already handled
         let end_x = self.converter.px_to_mm(arc.end_x);
-        let end_y = self.converter.px_to_mm(arc.end_y);  // Don't flip, already handled
+        let end_y = self.converter.px_to_mm(arc.end_y); // Don't flip, already handled
         let width = self.converter.px_to_mm(arc.stroke_width);
 
         format!(
@@ -356,7 +426,7 @@ impl SymbolExporter {
 
         for (x, y) in &polyline.points {
             let x = self.converter.px_to_mm(*x);
-            let y = self.converter.px_to_mm(*y);  // Don't flip, already handled
+            let y = self.converter.px_to_mm(*y); // Don't flip, already handled
             output.push_str(&format!("        (xy {:.4} {:.4})\n", x, y));
         }
 
@@ -364,7 +434,10 @@ impl SymbolExporter {
         let fill = if polyline.fill { "outline" } else { "none" };
 
         output.push_str("      )\n");
-        output.push_str(&format!("      (stroke (width {:.4}) (type default))\n", width));
+        output.push_str(&format!(
+            "      (stroke (width {:.4}) (type default))\n",
+            width
+        ));
         output.push_str(&format!("      (fill (type {}))\n", fill));
         output.push_str("    )\n");
 
@@ -377,7 +450,7 @@ impl SymbolExporter {
 
         for (x, y) in &polyline.points {
             let x = self.converter.px_to_mil(*x);
-            let y = self.converter.px_to_mil(*y);  // Don't flip, already handled
+            let y = self.converter.px_to_mil(*y); // Don't flip, already handled
             output.push_str(&format!(" {} {}", x, y));
         }
 
@@ -407,5 +480,82 @@ impl SymbolExporter {
             "    (text \"{}\" (at {:.4} {:.4} {})\n      (effects (font (size {:.4} {:.4})))\n    )\n",
             text.text, x, y, rotation as i32, size, size
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SymbolExporter, SymbolFillColor};
+    use crate::cli::KicadVersion;
+    use crate::kicad::symbol::{KiPin, KiRectangle, KiSymbol, PinStyle, PinType};
+
+    fn test_symbol(fill: bool) -> KiSymbol {
+        KiSymbol {
+            name: "Fixture".to_string(),
+            reference: "U".to_string(),
+            value: "Fixture".to_string(),
+            description: String::new(),
+            footprint: String::new(),
+            datasheet: String::new(),
+            manufacturer: String::new(),
+            lcsc_id: String::new(),
+            jlc_id: String::new(),
+            pins: vec![KiPin {
+                number: "1".to_string(),
+                name: "IN".to_string(),
+                pin_type: PinType::Input,
+                style: PinStyle::Line,
+                pos_x: 0.0,
+                pos_y: 0.0,
+                rotation: 0,
+                length: 100.0,
+            }],
+            rectangles: vec![KiRectangle {
+                x1: 0.0,
+                y1: 0.0,
+                x2: 100.0,
+                y2: -100.0,
+                stroke_width: 0.0,
+                fill,
+            }],
+            circles: Vec::new(),
+            arcs: Vec::new(),
+            polylines: Vec::new(),
+            texts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn uses_background_fill_when_no_custom_color_is_configured() {
+        let exporter = SymbolExporter::new(KicadVersion::V6, None);
+        let output = exporter
+            .export(&test_symbol(true))
+            .expect("symbol export should succeed");
+
+        assert!(output.contains("(fill (type background))"));
+        assert!(!output.contains("(fill (type color)"));
+    }
+
+    #[test]
+    fn uses_custom_fill_color_when_configured() {
+        let exporter = SymbolExporter::new(
+            KicadVersion::V6,
+            Some(SymbolFillColor::parse("#005C8FCC").expect("color should parse")),
+        );
+        let output = exporter
+            .export(&test_symbol(true))
+            .expect("symbol export should succeed");
+
+        assert!(output.contains("(fill (type color) (color 0 92 143 0.8))"));
+    }
+
+    #[test]
+    fn parses_rgb_without_alpha_as_fully_opaque() {
+        let color = SymbolFillColor::parse("#005C8F").expect("color should parse");
+
+        assert_eq!(
+            color.to_kicad_fill(),
+            "(fill (type color) (color 0 92 143 1))"
+        );
     }
 }

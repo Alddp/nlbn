@@ -47,6 +47,10 @@ pub struct Cli {
     #[arg(long)]
     pub project_relative: bool,
 
+    /// Override filled symbol rectangle color with #RRGGBB or #RRGGBBAA
+    #[arg(long, value_name = "HEX")]
+    pub symbol_fill_color: Option<String>,
+
     /// Enable debug logging
     #[arg(long)]
     pub debug: bool,
@@ -84,6 +88,9 @@ impl Cli {
                 "At least one conversion option must be specified (--symbol, --footprint, --3d, or --full)".to_string()
             ));
         }
+
+        let _ = self.parsed_symbol_fill_color()?;
+        crate::library::set_default_overwrite(self.overwrite);
 
         Ok(())
     }
@@ -126,6 +133,15 @@ impl Cli {
         } else {
             KicadVersion::V6
         }
+    }
+
+    pub fn parsed_symbol_fill_color(
+        &self,
+    ) -> Result<Option<crate::kicad::symbol_exporter::SymbolFillColor>> {
+        self.symbol_fill_color
+            .as_deref()
+            .map(crate::kicad::symbol_exporter::SymbolFillColor::parse)
+            .transpose()
     }
 }
 

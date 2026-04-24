@@ -16,9 +16,12 @@ impl TestWorkspace {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after unix epoch")
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join("nlbn-tests")
-            .join(format!("{}-{}-{}", test_name, std::process::id(), unique));
+        let root = std::env::temp_dir().join("nlbn-tests").join(format!(
+            "{}-{}-{}",
+            test_name,
+            std::process::id(),
+            unique
+        ));
         fs::create_dir_all(&root).expect("should create test workspace");
         Self { root }
     }
@@ -46,6 +49,7 @@ fn test_cli(project_relative: bool) -> Cli {
         overwrite: false,
         v5: false,
         project_relative,
+        symbol_fill_color: None,
         debug: false,
         continue_on_error: false,
         parallel: 1,
@@ -115,7 +119,10 @@ fn extract_model_path(footprint: &str) -> &str {
 
 fn expected_model_path(model_name: &str, project_relative: bool, extension: &str) -> String {
     if project_relative {
-        format!("${{KIPRJMOD}}/demo-lib.3dshapes/{}.{}", model_name, extension)
+        format!(
+            "${{KIPRJMOD}}/demo-lib.3dshapes/{}.{}",
+            model_name, extension
+        )
     } else {
         format!("../demo-lib.3dshapes/{}.{}", model_name, extension)
     }

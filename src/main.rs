@@ -2,6 +2,7 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use nlbn::checkpoint::{append_checkpoint, load_checkpoint};
 use nlbn::*;
+use std::collections::HashSet;
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -55,22 +56,14 @@ async fn run(args: Cli) -> error::Result<()> {
     // Load checkpoint and filter already-completed IDs
     let checkpoint_path = args.output.join(".checkpoint");
     let completed_ids = load_checkpoint(&checkpoint_path);
-    let lcsc_ids: Vec<String> = if is_batch && !completed_ids.is_empty() {
-        let before = lcsc_ids.len();
-        let filtered: Vec<String> = lcsc_ids
-            .into_iter()
-            .filter(|id| !completed_ids.contains(id))
-            .collect();
-        if before != filtered.len() {
-            log::info!(
-                "Resuming: skipping {} already completed components",
-                before - filtered.len()
-            );
-        }
-        filtered
-    } else {
-        lcsc_ids
-    };
+    let before = lcsc_ids.len();
+    let lcsc_ids = filter_pending_lcsc_ids(lcsc_ids, &completed_ids, is_batch, args.overwrite);
+    if is_batch && !args.overwrite && before != lcsc_ids.len() {
+        log::info!(
+            "Resuming: skipping {} already completed components",
+            before - lcsc_ids.len()
+        );
+    }
 
     let total_count = lcsc_ids.len();
     if total_count == 0 {
@@ -222,6 +215,22 @@ async fn run(args: Cli) -> error::Result<()> {
     Ok(())
 }
 
+fn filter_pending_lcsc_ids(
+    lcsc_ids: Vec<String>,
+    completed_ids: &HashSet<String>,
+    is_batch: bool,
+    overwrite: bool,
+) -> Vec<String> {
+    if !is_batch || overwrite || completed_ids.is_empty() {
+        return lcsc_ids;
+    }
+
+    lcsc_ids
+        .into_iter()
+        .filter(|id| !completed_ids.contains(id))
+        .collect()
+}
+
 async fn process_component(
     args: &Cli,
     api: &EasyedaApi,
@@ -251,4 +260,30 @@ async fn process_component(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_pending_lcsc_ids;
+    use std::collections::HashSet;
+
+    #[test]
+    fn batch_resume_skips_completed_ids_without_overwrite() {
+        let ids = vec!["C1".to_string(), "C2".to_string(), "C3".to_string()];
+        let completed = HashSet::from(["C2".to_string()]);
+
+        let filtered = filter_pending_lcsc_ids(ids, &completed, true, false);
+
+        assert_eq!(filtered, vec!["C1".to_string(), "C3".to_string()]);
+    }
+
+    #[test]
+    fn batch_resume_keeps_completed_ids_when_overwrite_is_enabled() {
+        let ids = vec!["C1".to_string(), "C2".to_string(), "C3".to_string()];
+        let completed = HashSet::from(["C2".to_string()]);
+
+        let filtered = filter_pending_lcsc_ids(ids.clone(), &completed, true, true);
+
+        assert_eq!(filtered, ids);
+    }
 }

@@ -91,6 +91,7 @@ Options:
   --overwrite             Overwrite existing components
   --v5                    Use KiCad v5 legacy format
   --project-relative      Use ${KIPRJMOD}/... paths for 3D models
+  --symbol-fill-color     Override filled symbol rectangle color with #RRGGBB or #RRGGBBAA
   --debug                 Enable debug logging
   -h, --help              Print help
 ```
