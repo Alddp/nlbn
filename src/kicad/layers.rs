@@ -1,5 +1,5 @@
-/// KiCad layer mapping for EasyEDA footprints
-/// Map EasyEDA layer ID to KiCad layer name
+//! KiCad layer mapping for EasyEDA footprints.
+//! Maps EasyEDA layer IDs to KiCad layer names.
 
 const FRONT_SMD_PAD_LAYERS: [&str; 3] = ["F.Cu", "F.Paste", "F.Mask"];
 const BACK_SMD_PAD_LAYERS: [&str; 3] = ["B.Cu", "B.Paste", "B.Mask"];

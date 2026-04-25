@@ -96,7 +96,7 @@ impl FootprintExporter {
         for layer in &pad.layers {
             output.push_str(&format!(" \"{}\"", layer));
         }
-        output.push_str(")");
+        output.push(')');
 
         // Drill
         if let Some(drill) = &pad.drill {

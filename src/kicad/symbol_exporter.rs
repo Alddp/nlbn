@@ -352,7 +352,7 @@ impl SymbolExporter {
     fn format_text_v6(&self, text: &super::symbol::KiText) -> String {
         let x = self.converter.px_to_mm(text.x);
         let y = self.converter.px_to_mm(text.y);
-        let size = (text.font_size * 0.15).max(0.5).min(1.27);
+        let size = (text.font_size * 0.15).clamp(0.5, 1.27);
         let rotation = text.rotation;
 
         format!(

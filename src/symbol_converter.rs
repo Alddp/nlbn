@@ -92,7 +92,7 @@ pub(crate) fn convert_symbol_with_options_and_reporter(
     }
 
     // Convert rectangles with bbox adjustment
-    for (_idx, ee_rect) in ee_symbol.rectangles.iter().enumerate() {
+    for ee_rect in &ee_symbol.rectangles {
         let adjusted_x = ee_rect.x - component_data.bbox_x;
         let adjusted_y = component_data.bbox_y - ee_rect.y; // bbox_y - pos_y
         let adjusted_x2 = (ee_rect.x + ee_rect.width) - component_data.bbox_x;
@@ -221,37 +221,33 @@ pub(crate) fn convert_symbol_with_options_and_reporter(
         while i < tokens.len() {
             let token = tokens[i];
             match token {
-                "M" | "L" => {
+                "M" | "L" if i + 1 < tokens.len() => {
                     // Move or Line command, followed by x,y coordinates
-                    if i + 1 < tokens.len() {
-                        i += 1;
-                        // Parse coordinate pair (may be "x,y" or separate "x" "y")
-                        let coord_str = tokens[i];
-                        if let Some((x_str, y_str)) = coord_str.split_once(',') {
-                            if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
-                                let adj_x = x - component_data.bbox_x;
-                                let adj_y = component_data.bbox_y - y;
-                                points.push((adj_x, adj_y));
-                            }
-                        } else if i + 1 < tokens.len() {
-                            // Separate x and y
-                            if let (Ok(x), Ok(y)) =
-                                (tokens[i].parse::<f64>(), tokens[i + 1].parse::<f64>())
-                            {
-                                let adj_x = x - component_data.bbox_x;
-                                let adj_y = component_data.bbox_y - y;
-                                points.push((adj_x, adj_y));
-                                i += 1;
-                            }
+                    i += 1;
+                    // Parse coordinate pair (may be "x,y" or separate "x" "y")
+                    let coord_str = tokens[i];
+                    if let Some((x_str, y_str)) = coord_str.split_once(',') {
+                        if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
+                            let adj_x = x - component_data.bbox_x;
+                            let adj_y = component_data.bbox_y - y;
+                            points.push((adj_x, adj_y));
+                        }
+                    } else if i + 1 < tokens.len() {
+                        // Separate x and y
+                        if let (Ok(x), Ok(y)) =
+                            (tokens[i].parse::<f64>(), tokens[i + 1].parse::<f64>())
+                        {
+                            let adj_x = x - component_data.bbox_x;
+                            let adj_y = component_data.bbox_y - y;
+                            points.push((adj_x, adj_y));
+                            i += 1;
                         }
                     }
                 }
-                "Z" | "z" => {
+                "Z" | "z" if !points.is_empty() => {
                     // Close path: add line from current point back to start point
-                    if !points.is_empty() {
-                        let first_point = points[0];
-                        points.push(first_point);
-                    }
+                    let first_point = points[0];
+                    points.push(first_point);
                 }
                 _ => {}
             }

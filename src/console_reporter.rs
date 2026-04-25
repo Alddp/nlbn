@@ -120,7 +120,7 @@ impl RunReporter for ConsoleReporter {
 impl ConversionReporter for ConsoleReporter {
     fn emit_output_line(&self, line: &str) {
         if self.is_batch.load(Ordering::Relaxed) {
-            self.progress.println(line.to_string());
+            self.progress.println(line);
         } else {
             println!("{}", line);
         }

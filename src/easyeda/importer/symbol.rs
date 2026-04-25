@@ -134,10 +134,8 @@ impl SymbolImporter {
                         symbol.paths.push(path);
                     }
                 }
-                "LIB" => {
-                    if fields.len() > 3 {
-                        symbol.name = fields[3].to_string();
-                    }
+                "LIB" if fields.len() > 3 => {
+                    symbol.name = fields[3].to_string();
                 }
                 _ => {}
             }

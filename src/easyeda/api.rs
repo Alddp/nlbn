@@ -226,26 +226,32 @@ impl EasyedaApi {
         for shape in shapes {
             if shape.starts_with("SVGNODE~") {
                 let parts: Vec<&str> = shape.split('~').collect();
-                if parts.len() > 1 {
-                    if let Ok(svg_data) = serde_json::from_str::<serde_json::Value>(parts[1]) {
-                        if let Some(attrs) = svg_data.get("attrs") {
-                            if let Some(c_etype) = attrs.get("c_etype").and_then(|v| v.as_str()) {
-                                if c_etype == "outline3D" {
-                                    let uuid = attrs
-                                        .get("uuid")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    let title = attrs
-                                        .get("title")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
+                if parts.len() <= 1 {
+                    continue;
+                }
 
-                                    if let (Some(uuid), Some(title)) = (uuid, title) {
-                                        return Some(Model3dInfo { uuid, title });
-                                    }
-                                }
-                            }
-                        }
+                let Ok(svg_data) = serde_json::from_str::<serde_json::Value>(parts[1]) else {
+                    continue;
+                };
+                let Some(attrs) = svg_data.get("attrs") else {
+                    continue;
+                };
+                let Some(c_etype) = attrs.get("c_etype").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+
+                if c_etype == "outline3D" {
+                    let uuid = attrs
+                        .get("uuid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let title = attrs
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    if let (Some(uuid), Some(title)) = (uuid, title) {
+                        return Some(Model3dInfo { uuid, title });
                     }
                 }
             }

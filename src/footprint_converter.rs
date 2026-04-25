@@ -439,26 +439,25 @@ pub(crate) fn convert_footprint_with_options_and_reporter(
     }
 
     // Add 3D model reference if available
-    if let Some(model_info) = &component_data.model_3d {
-        if options.include_3d_model {
-            // Use LCSC ID as unique identifier to prevent name collisions
-            let model_name = format!("{}_{}", sanitize_name(&model_info.title), lcsc_id);
-            let lib_name = lib_manager.lib_name();
-            if let Some((model_filename, model_path)) = preferred_3d_model(lib_manager, &model_name)
-            {
-                let model_path = if options.project_relative_3d {
-                    format!("${{KIPRJMOD}}/{}.3dshapes/{}", lib_name, model_filename)
-                } else {
-                    library_model_path(lib_manager, &model_filename, &model_path)
-                };
+    if let Some(model_info) = &component_data.model_3d
+        && options.include_3d_model
+    {
+        // Use LCSC ID as unique identifier to prevent name collisions
+        let model_name = format!("{}_{}", sanitize_name(&model_info.title), lcsc_id);
+        let lib_name = lib_manager.lib_name();
+        if let Some((model_filename, model_path)) = preferred_3d_model(lib_manager, &model_name) {
+            let model_path = if options.project_relative_3d {
+                format!("${{KIPRJMOD}}/{}.3dshapes/{}", lib_name, model_filename)
+            } else {
+                library_model_path(lib_manager, &model_filename, &model_path)
+            };
 
-                ki_footprint.model_3d = Some(kicad::Ki3dModel {
-                    path: model_path,
-                    offset: (0.0, 0.0, 0.0),
-                    scale: (1.0, 1.0, 1.0),
-                    rotate: (0.0, 0.0, 0.0),
-                });
-            }
+            ki_footprint.model_3d = Some(kicad::Ki3dModel {
+                path: model_path,
+                offset: (0.0, 0.0, 0.0),
+                scale: (1.0, 1.0, 1.0),
+                rotate: (0.0, 0.0, 0.0),
+            });
         }
     }
 

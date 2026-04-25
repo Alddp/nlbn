@@ -176,7 +176,8 @@ async fn run_parallel(
     let mut join_set = JoinSet::new();
     let continue_on_error = prepared.request.run.continue_on_error;
 
-    for lcsc_id in prepared.request.lcsc_ids.iter().cloned() {
+    for lcsc_id in &prepared.request.lcsc_ids {
+        let lcsc_id = lcsc_id.clone();
         let semaphore = Arc::clone(&semaphore);
         let reporter = Arc::clone(&reporter);
         let request = Arc::clone(&prepared.request);

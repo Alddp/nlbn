@@ -1,5 +1,6 @@
 use crate::error::{KicadError, Result};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 pub struct ModelExporter;
 
@@ -34,13 +35,10 @@ impl ModelExporter {
 
             // First line is the material name
             let material_name = lines[0].trim();
-            let material = materials
-                .get(material_name)
-                .cloned()
-                .unwrap_or_else(|| Material {
-                    diffuse: (0.8, 0.8, 0.8),
-                    specular: (0.5, 0.5, 0.5),
-                });
+            let material = materials.get(material_name).cloned().unwrap_or(Material {
+                diffuse: (0.8, 0.8, 0.8),
+                specular: (0.5, 0.5, 0.5),
+            });
 
             // Process faces for this material
             let mut index_counter = 0;
@@ -60,16 +58,19 @@ impl ModelExporter {
                         let index_str = part.replace("//", "");
                         if let Ok(index) = index_str.parse::<i32>() {
                             // Check if we've seen this vertex before
-                            if !link_dict.contains_key(&index) {
-                                link_dict.insert(index, index_counter);
-                                face_index.push(index_counter);
-                                // Add vertex (OBJ indices are 1-based)
-                                if (index as usize) <= vertices.len() {
-                                    points.push(vertices[(index - 1) as usize].clone());
+                            match link_dict.entry(index) {
+                                Entry::Vacant(entry) => {
+                                    entry.insert(index_counter);
+                                    face_index.push(index_counter);
+                                    // Add vertex (OBJ indices are 1-based)
+                                    if (index as usize) <= vertices.len() {
+                                        points.push(vertices[(index - 1) as usize].clone());
+                                    }
+                                    index_counter += 1;
                                 }
-                                index_counter += 1;
-                            } else {
-                                face_index.push(*link_dict.get(&index).unwrap());
+                                Entry::Occupied(entry) => {
+                                    face_index.push(*entry.get());
+                                }
                             }
                         }
                     }
@@ -86,7 +87,7 @@ impl ModelExporter {
             }
 
             // Duplicate last point (Python does this: points.insert(-1, points[-1]))
-            if points.len() > 0 {
+            if !points.is_empty() {
                 let last = points[points.len() - 1].clone();
                 points.insert(points.len() - 1, last);
             }
@@ -140,7 +141,7 @@ impl ModelExporter {
                 if i < coord_index.len() - 1 {
                     output.push_str(",\n");
                 } else {
-                    output.push_str("\n");
+                    output.push('\n');
                 }
             }
 
@@ -216,26 +217,26 @@ impl ModelExporter {
                 if line.starts_with("Kd ") {
                     // Diffuse color
                     let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 4 {
-                        if let (Ok(r), Ok(g), Ok(b)) = (
+                    if parts.len() >= 4
+                        && let (Ok(r), Ok(g), Ok(b)) = (
                             parts[1].parse::<f64>(),
                             parts[2].parse::<f64>(),
                             parts[3].parse::<f64>(),
-                        ) {
-                            mat.diffuse = (r, g, b);
-                        }
+                        )
+                    {
+                        mat.diffuse = (r, g, b);
                     }
                 } else if line.starts_with("Ks ") {
                     // Specular color
                     let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 4 {
-                        if let (Ok(r), Ok(g), Ok(b)) = (
+                    if parts.len() >= 4
+                        && let (Ok(r), Ok(g), Ok(b)) = (
                             parts[1].parse::<f64>(),
                             parts[2].parse::<f64>(),
                             parts[3].parse::<f64>(),
-                        ) {
-                            mat.specular = (r, g, b);
-                        }
+                        )
+                    {
+                        mat.specular = (r, g, b);
                     }
                 } else if line == "endmtl" {
                     // End of material definition

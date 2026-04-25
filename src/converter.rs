@@ -170,6 +170,12 @@ impl Converter {
     }
 }
 
+impl Default for Converter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn safe_acos_ratio(numerator: f64, denominator: f64, context: &str) -> Result<f64> {
     if denominator.abs() < 1e-12 {
         return Err(ConversionError::ArcConversion(format!(
