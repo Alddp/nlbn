@@ -7,6 +7,9 @@ use crate::export_options::FootprintExportOptions;
 use crate::kicad;
 use crate::library::LibraryManager;
 use crate::reporting::{ConversionReporter, noop_reporter};
+use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 pub fn convert_footprint(
     args: &Cli,
@@ -441,11 +444,12 @@ pub(crate) fn convert_footprint_with_options_and_reporter(
             // Use LCSC ID as unique identifier to prevent name collisions
             let model_name = format!("{}_{}", sanitize_name(&model_info.title), lcsc_id);
             let lib_name = lib_manager.lib_name();
-            if let Some(model_filename) = preferred_3d_model_filename(lib_manager, &model_name) {
+            if let Some((model_filename, model_path)) = preferred_3d_model(lib_manager, &model_name)
+            {
                 let model_path = if options.project_relative_3d {
                     format!("${{KIPRJMOD}}/{}.3dshapes/{}", lib_name, model_filename)
                 } else {
-                    format!("../{}.3dshapes/{}", lib_name, model_filename)
+                    library_model_path(lib_manager, &model_filename, &model_path)
                 };
 
                 ki_footprint.model_3d = Some(kicad::Ki3dModel {
@@ -474,12 +478,138 @@ pub(crate) fn convert_footprint_with_options_and_reporter(
     Ok(())
 }
 
-fn preferred_3d_model_filename(lib_manager: &LibraryManager, model_name: &str) -> Option<String> {
-    if lib_manager.get_wrl_path(model_name).is_file() {
-        Some(format!("{}.wrl", model_name))
-    } else if lib_manager.get_step_path(model_name).is_file() {
-        Some(format!("{}.step", model_name))
+fn preferred_3d_model(lib_manager: &LibraryManager, model_name: &str) -> Option<(String, PathBuf)> {
+    let step_path = lib_manager.get_step_path(model_name);
+    if step_path.is_file() {
+        Some((format!("{}.step", model_name), step_path))
     } else {
-        None
+        let wrl_path = lib_manager.get_wrl_path(model_name);
+        if wrl_path.is_file() {
+            Some((format!("{}.wrl", model_name), wrl_path))
+        } else {
+            None
+        }
     }
+}
+
+fn absolute_model_path(path: &Path) -> String {
+    if let Ok(canonical_path) = path.canonicalize() {
+        canonical_path.display().to_string()
+    } else {
+        path.display().to_string()
+    }
+}
+
+fn library_model_path(
+    lib_manager: &LibraryManager,
+    model_filename: &str,
+    model_path: &Path,
+) -> String {
+    if let Some(var_name) = kicad_env_var_for_path(lib_manager.output_path()) {
+        format!(
+            "${{{}}}/{}.3dshapes/{}",
+            var_name,
+            lib_manager.lib_name(),
+            model_filename
+        )
+    } else {
+        absolute_model_path(model_path)
+    }
+}
+
+fn kicad_env_var_for_path(path: &Path) -> Option<String> {
+    let canonical_path = path.canonicalize().ok()?;
+
+    let mut candidates = std::env::vars().collect::<Vec<_>>();
+    candidates.extend(kicad_configured_env_vars());
+
+    candidates
+        .into_iter()
+        .filter(|(name, value)| {
+            is_kicad_env_var_name(name) && env_value_matches_path(value, &canonical_path)
+        })
+        .map(|(name, _)| name)
+        .min_by(|left, right| {
+            let left_key = env_var_preference_key(left);
+            let right_key = env_var_preference_key(right);
+            left_key.cmp(&right_key)
+        })
+}
+
+fn kicad_configured_env_vars() -> Vec<(String, String)> {
+    kicad_common_config_paths()
+        .into_iter()
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .filter_map(|content| serde_json::from_str::<Value>(&content).ok())
+        .filter_map(|json| json.get("environment")?.get("vars")?.as_object().cloned())
+        .flat_map(|vars| {
+            vars.into_iter().filter_map(|(name, value)| {
+                value
+                    .as_str()
+                    .map(|value| (name.to_string(), value.to_string()))
+            })
+        })
+        .collect()
+}
+
+fn kicad_common_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return paths;
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        let prefs = home.join("Library").join("Preferences").join("kicad");
+        collect_kicad_common_config_paths(&prefs, &mut paths);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let config_base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"));
+        collect_kicad_common_config_paths(&config_base.join("kicad"), &mut paths);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            collect_kicad_common_config_paths(&appdata.join("kicad"), &mut paths);
+        }
+    }
+
+    paths
+}
+
+fn collect_kicad_common_config_paths(root: &Path, paths: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let path = entry.path().join("kicad_common.json");
+        if path.is_file() {
+            paths.push(path);
+        }
+    }
+}
+
+fn env_value_matches_path(value: &str, canonical_path: &Path) -> bool {
+    Path::new(value)
+        .canonicalize()
+        .map(|candidate| candidate == canonical_path)
+        .unwrap_or(false)
+}
+
+fn is_kicad_env_var_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn env_var_preference_key(name: &str) -> (usize, String) {
+    let project_specific = if name.starts_with("KICAD") { 1 } else { 0 };
+    (project_specific, name.to_string())
 }

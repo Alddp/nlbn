@@ -130,14 +130,24 @@ fn has_model_reference(footprint: &str) -> bool {
     footprint.contains("(model \"")
 }
 
-fn expected_model_path(model_name: &str, project_relative: bool, extension: &str) -> String {
+fn expected_model_path(
+    output_dir: &Path,
+    model_name: &str,
+    project_relative: bool,
+    extension: &str,
+) -> String {
     if project_relative {
         format!(
             "${{KIPRJMOD}}/demo-lib.3dshapes/{}.{}",
             model_name, extension
         )
     } else {
-        format!("../demo-lib.3dshapes/{}.{}", model_name, extension)
+        output_dir
+            .join(format!("demo-lib.3dshapes/{}.{}", model_name, extension))
+            .canonicalize()
+            .expect("model fixture path should canonicalize")
+            .display()
+            .to_string()
     }
 }
 
@@ -162,8 +172,8 @@ fn omits_model_reference_when_no_3d_files_exist() {
 }
 
 #[test]
-fn prefers_wrl_reference_when_wrl_and_step_exist() {
-    let workspace = TestWorkspace::new("prefer-wrl");
+fn prefers_step_reference_when_wrl_and_step_exist() {
+    let workspace = TestWorkspace::new("prefer-step");
     let output_dir = workspace.library_dir();
     let lib_manager = LibraryManager::new(&output_dir);
     lib_manager
@@ -183,13 +193,13 @@ fn prefers_wrl_reference_when_wrl_and_step_exist() {
     let content = footprint_content(&output_dir, &footprint_name);
     assert_eq!(
         extract_model_path(&content),
-        expected_model_path(&model_name, false, "wrl")
+        expected_model_path(&output_dir, &model_name, false, "step")
     );
 }
 
 #[test]
-fn falls_back_to_step_reference_when_only_step_exists() {
-    let workspace = TestWorkspace::new("fallback-step");
+fn uses_step_reference_when_only_step_exists() {
+    let workspace = TestWorkspace::new("only-step");
     let output_dir = workspace.library_dir();
     let lib_manager = LibraryManager::new(&output_dir);
     lib_manager
@@ -208,7 +218,32 @@ fn falls_back_to_step_reference_when_only_step_exists() {
     let content = footprint_content(&output_dir, &footprint_name);
     assert_eq!(
         extract_model_path(&content),
-        expected_model_path(&model_name, false, "step")
+        expected_model_path(&output_dir, &model_name, false, "step")
+    );
+}
+
+#[test]
+fn falls_back_to_wrl_reference_when_only_wrl_exists() {
+    let workspace = TestWorkspace::new("fallback-wrl");
+    let output_dir = workspace.library_dir();
+    let lib_manager = LibraryManager::new(&output_dir);
+    lib_manager
+        .create_directories()
+        .expect("should create library directories");
+
+    let args = test_cli(false);
+    let component_data = test_component_data();
+    let (footprint_name, model_name) = expected_names(&component_data, "C123456");
+
+    fs::write(lib_manager.get_wrl_path(&model_name), "wrl fixture").expect("should write wrl");
+
+    convert_footprint(&args, &component_data, &lib_manager, "C123456")
+        .expect("footprint conversion should succeed");
+
+    let content = footprint_content(&output_dir, &footprint_name);
+    assert_eq!(
+        extract_model_path(&content),
+        expected_model_path(&output_dir, &model_name, false, "wrl")
     );
 }
 
@@ -233,7 +268,7 @@ fn uses_kiprjmod_model_path_when_project_relative_mode_is_enabled() {
     let content = footprint_content(&output_dir, &footprint_name);
     assert_eq!(
         extract_model_path(&content),
-        expected_model_path(&model_name, true, "wrl")
+        expected_model_path(&output_dir, &model_name, true, "wrl")
     );
 }
 

@@ -50,7 +50,7 @@ pub struct Cli {
     #[arg(long = "overwrite-3d")]
     pub overwrite_model_3d: bool,
 
-    /// Use project-relative paths (KIPRJMOD) instead of footprint-relative paths for 3D models
+    /// Use project-relative paths (KIPRJMOD) instead of KiCad environment or absolute paths for 3D models
     #[arg(long)]
     pub project_relative: bool,
 

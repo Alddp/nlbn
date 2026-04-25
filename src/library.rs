@@ -69,6 +69,10 @@ impl LibraryManager {
         &self.lib_name
     }
 
+    pub fn output_path(&self) -> &Path {
+        &self.output_path
+    }
+
     pub fn overwrite_enabled(&self) -> bool {
         self.overwrite
     }
