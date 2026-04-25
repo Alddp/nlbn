@@ -1,134 +1,45 @@
-<div align="center">
-  <img src="imgs/nlbn.png" alt="nlbn logo" width="300"/>
+# nlbn 自用优化版
 
-  <h1>nlbn</h1>
+这是我基于原项目改出的自用版本，重点针对 **macOS + KiCad** 元件库导出流程优化，不是通用发行版。
 
-  <p><strong>Fast EasyEDA/LCSC to KiCad converter written in Rust</strong></p>
+- 本仓库地址：https://github.com/Alddp/nlbn
+- 原项目地址：https://github.com/linkyourbin/nlbn
+- 许可证：CC BY-NC 4.0，继承自原项目
 
-  <p>Convert EasyEDA and LCSC components to KiCad library formats with blazing fast parallel downloads.</p>
+## 和原项目的区别
 
-  <p>
-    <a href="https://crates.io/crates/nlbn"><img src="https://img.shields.io/crates/v/nlbn.svg" alt="Crates.io"></a>
-    <a href="https://creativecommons.org/licenses/by-nc/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg" alt="License: CC BY-NC 4.0"></a>
-    <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-1.70%2B-orange.svg" alt="Rust"></a>
-  </p>
+- 面向 macOS 和 KiCad 使用场景调整，Windows 未经测试。
+- 移除了旧的 KiCad v5 兼容路径，不再以 KiCad v5 为兼容目标。
+- 符号、封装、3D 模型分别拥有独立覆盖参数。
+- 默认保留已有库资产，只有显式指定覆盖时才替换。
+- 通过输出目录中的 `.checkpoint` 文件支持批处理续跑。
+- 增加批量导出的进度报告和运行汇总。
+- 支持 `--project-relative`，为 3D 模型生成 `${KIPRJMOD}` 引用。
+- 支持 `--symbol-fill-color`，可覆盖符号填充色。
+- 重构导入/导出流水线，让转换选项边界更清晰。
+- 增加覆盖行为和 3D 模型引用生成测试。
 
-</div>
+这个版本是 SeEx 自用优化版预期使用的 `nlbn`：
 
----
+https://github.com/Alddp/seex
 
-## Features
+## 平台和兼容性说明
 
-- Convert symbols, footprints, and 3D models
-- Batch processing with parallel downloads
-- Standalone binary - no dependencies required
-- Low memory usage
+- 主要目标环境：macOS + KiCad。
+- Windows 未经测试。
+- KiCad v5 兼容已经移除。
+- 这个仓库按个人 KiCad 元件库维护流程优化，功能取舍不以通用发行版为目标。
 
-## Installation
+## 常用新增参数
 
-### Option 1: Download Pre-built Binary
-
-Download from [GitHub Releases](https://github.com/linkyourbin/nlbn/releases):
-- Windows: `nlbn-windows-x86_64.exe.zip`
-- Linux: `nlbn-linux-x86_64.tar.gz`
-- macOS: `nlbn-macos-x86_64.tar.gz` or `nlbn-macos-aarch64.tar.gz`
-
-### Option 2: Install from crates.io
-
-```bash
-cargo install nlbn
-```
-
-### Option 3: Build from Source
-
-```bash
-git clone https://github.com/linkyourbin/nlbn.git
-cd nlbn
-cargo build --release
-```
-
-## Quick Start
-
-### Single Component
-
-```bash
-# Convert everything (symbol + footprint + 3D model)
-nlbn --full --lcsc-id C2040
-
-# Convert only symbol
-nlbn --symbol --lcsc-id C2040
-```
-
-### Batch Processing
-
-```bash
-# Create a file with LCSC IDs (one per line)
-echo "C2040" > components.txt
-echo "C529356" >> components.txt
-
-# Batch convert with 8 parallel threads
-nlbn --full --batch components.txt --parallel 8
-
-# Continue on errors
-nlbn --full --batch components.txt --parallel 8 --continue-on-error
-```
-
-## Usage
-
-```
-nlbn [OPTIONS]
-
-Options:
-  --lcsc-id <ID>          LCSC component ID (e.g., C2040)
-  --batch <FILE>          Batch mode: read IDs from file
-  --symbol                Convert symbol only
-  --footprint             Convert footprint only
-  --3d                    Convert 3D model only
-  --full                  Convert all (symbol + footprint + 3D)
-  -o, --output <PATH>     Output directory [default: .]
-  --parallel <N>          Parallel threads for batch mode [default: 4]
-  --continue-on-error     Skip failed components in batch mode
-  --overwrite             Overwrite existing components
-  --project-relative      Use ${KIPRJMOD}/... paths for 3D models
-  --symbol-fill-color     Override filled symbol rectangle color with #RRGGBB or #RRGGBBAA
-  --debug                 Enable debug logging
-  -h, --help              Print help
-```
-
-## Output
-
-```
-output/
-├── nlbn.kicad_sym              # Symbol library
-├── nlbn.pretty/                # Footprint library
-│   └── Component_Name.kicad_mod
-└── nlbn.3dshapes/              # 3D model library
-    ├── Component_Name.wrl
-    └── Component_Name.step
-```
-
-### Symbol
-
-<img src="imgs/symbol.png" alt="KiCad symbol" width="500"/>
-
-### Footprint
-
-<img src="imgs/footprint.png" alt="KiCad footprint" width="500"/>
-
-### 3D Model
-
-<img src="imgs/3dmodel.png" alt="KiCad 3D model" width="500"/>
-
-## Examples
-
-```bash
-# High-performance batch conversion
-nlbn --full --batch components.txt --parallel 16 -o ./library
-
-# Resume interrupted batch (skip existing)
-nlbn --full --batch components.txt --continue-on-error
+```text
+--overwrite-symbol      只覆盖符号输出
+--overwrite-footprint   只覆盖封装输出
+--overwrite-3d          只覆盖 3D 模型输出
+--project-relative      使用 ${KIPRJMOD} 路径引用 3D 模型
+--symbol-fill-color     覆盖符号填充色
 ```
 
 ## License
 
-This work is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). You are free to share and adapt this work for non-commercial purposes with attribution.
+This project is licensed under CC BY-NC 4.0.
